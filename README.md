@@ -1,6 +1,6 @@
 # Safe MCP Server & Ledger Integration
 
-One unified Node.js app to manage Safe multisig transactions with 4 different modes.
+One unified Node.js app to manage Safe multisig transactions.
 
 ## Setup
 
@@ -17,47 +17,41 @@ Edit `.env` and add your `SAFE_API_KEY`. For Telegram mode, also add `TELEGRAM_B
 
 ## Modes
 
-The app supports 4 modes, selected via command line flags:
+The app requires **exactly two flags** to run: one for how transactions are read/decided (Input Mode), and one for how approved transactions are signed (Confirmation Mode).
 
-### 1. MCP Mode (`--mode mcp`)
-Exposes an MCP server over HTTP (Streamable HTTP transport) with tools: `safe_list_pending` and `safe_decide_transaction`.
-An external AI agent connects and makes decisions.
-When approved, the tx goes to `ledger-queue.json`. When rejected, it's a no-op.
+### 1. Input Mode Flags (Choose One)
+
+| Flag | Description |
+|------|-------------|
+| `--mcp` | Starts an MCP server over HTTP (Streamable HTTP transport) with tools: `safe_list_pending` and `safe_decide_transaction`. An external AI agent connects and makes decisions. |
+| `--dev` | Starts an interactive command line interface. Lists pending transactions and prompts you to approve/reject using arrow keys. |
+
+### 2. Confirmation Mode Flags (Choose One)
+
+| Flag | Description |
+|------|-------------|
+| `--ledger` | Serves the Ledger frontend as a static Express app on `LEDGER_PORT`. Reads `ledger-queue.json` and lets you sign with a Ledger hardware wallet. |
+| `--telegram` | Polls for new pending transactions and sends details to a Telegram bot. You can approve/reject via inline buttons in Telegram. Needs `TELEGRAM_BOT_TOKEN` and `ADMIN_TELEGRAM_CHAT_ID` in `.env`. |
+
+### Valid Combinations
+
+You must combine one Input flag and one Confirmation flag:
+
 ```bash
-node index.mjs --mode mcp
+# AI agent decides via MCP, you sign via Ledger UI
+node index.mjs --mcp --ledger
+
+# AI agent decides via MCP, you sign via Telegram bot
+node index.mjs --mcp --telegram
+
+# You decide via CLI, you sign via Ledger UI
+node index.mjs --dev --ledger
+
+# You decide via CLI, you sign via Telegram bot
+node index.mjs --dev --telegram
 ```
 
-### 2. Dev Mode (`--mode dev`)
-Interactive command line interface. Lists pending transactions and prompts you to approve/reject using arrow keys.
-When approved, tx goes to `ledger-queue.json`.
-```bash
-node index.mjs --mode dev
-```
-
-### 3. Telegram Mode (`--mode telegram`)
-Polls for new pending transactions and sends details to a Telegram bot.
-You can approve/reject via inline buttons in Telegram.
-Needs `TELEGRAM_BOT_TOKEN` and `ADMIN_TELEGRAM_CHAT_ID` in `.env`.
-When approved, tx goes to `ledger-queue.json`.
-```bash
-node index.mjs --mode telegram
-```
-
-### 4. Ledger Mode (`--mode ledger`)
-Serves the existing Ledger frontend as a static Express app.
-The frontend reads `ledger-queue.json` and lets you sign with a Ledger hardware wallet.
-```bash
-node index.mjs --mode ledger
-```
-
-### Combined Modes
-You can run the Ledger UI alongside any other mode by adding the `--ledger` flag.
-For example, to run the MCP server and serve the Ledger UI simultaneously:
-```bash
-node index.mjs --mode mcp --ledger
-```
-
-In combined mode, the MCP server runs on `MCP_PORT` (default 3847) and the Ledger UI runs on `LEDGER_PORT` (default 3848).
+*Note: In all modes, approvals write the transaction to `ledger-queue.json`, and rejections are treated as a no-op (the transaction stays pending on-chain).*
 
 ## MCP Tools
 
