@@ -1,9 +1,13 @@
-import { LedgerEIP1193Provider } from "@ledgerhq/ledger-wallet-provider";
+import { initializeLedgerProvider } from "@ledgerhq/ledger-wallet-provider";
+import "@ledgerhq/ledger-wallet-provider/styles.css";
 import SafeApiKit from "@safe-global/api-kit";
 import Safe from "@safe-global/protocol-kit";
-import { ethers } from "ethers";
+import { SigningMethod } from "@safe-global/types-kit";
 
 // ── Config ──────────────────────────────────────────────────────────────
+// Vite: set VITE_SAFE_API_KEY in .env (required by Safe Transaction Service API).
+const SAFE_API_KEY = import.meta.env.VITE_SAFE_API_KEY;
+
 const SAFE_ADDRESS = "0xe4522AcE60ccE4658751024310FF04f84daf8149";
 const CHAIN_ID = 42161; // Arbitrum One
 const USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"; // Native USDC on Arbitrum
@@ -47,14 +51,38 @@ function log(msg) {
 let provider = null;
 let signerAddress = null;
 
+// Initialize the Ledger Button — this registers an EIP-6963 provider and
+// renders a floating connection button that handles device pairing.
+const cleanupLedger = initializeLedgerProvider({
+  dAppIdentifier: "safe-ledger-propose",
+  loggerLevel: "info",
+  floatingButtonPosition: "bottom-right",
+  environment: "production",
+});
+
+// Listen for the Ledger provider announcement (EIP-6963)
+window.addEventListener("eip6963:announceProvider", (event) => {
+  const detail = event.detail;
+  if (!detail?.provider) return;
+
+  provider = detail.provider;
+  log(`Ledger provider discovered: ${detail.info?.name ?? "unknown"}`);
+  $btnConnect.disabled = false;
+});
+
+// Ask for providers
+window.dispatchEvent(new Event("eip6963:requestProvider"));
+
 $btnConnect.addEventListener("click", async () => {
+  if (!provider) {
+    log("No Ledger provider discovered yet. Make sure Ledger Button loaded.");
+    return;
+  }
+
   try {
     $btnConnect.disabled = true;
     $btnConnect.textContent = "Connecting…";
-    log("Initializing Ledger provider…");
-
-    // Initialize the Ledger EIP-1193 provider
-    provider = new LedgerEIP1193Provider();
+    log("Requesting accounts from Ledger…");
 
     // Request accounts — this triggers the Ledger connection flow
     const accounts = await provider.request({
@@ -135,21 +163,44 @@ $btnPropose.addEventListener("click", async () => {
       ],
     });
 
-    log("Safe transaction created. Requesting Ledger signature…");
+    log(
+      "Safe transaction created. Confirm on your Ledger: you should see EIP-712 Safe transaction fields (not a blind hash).",
+    );
     $btnPropose.textContent = "Please confirm on Ledger…";
 
-    // Sign the transaction hash with Ledger
+    // EIP-712 typed data — Ledger shows a structured review. signHash() uses raw
+    // signMessage/eth_sign-style signing and often produces no clear prompt unless blind signing is on.
+    const signedSafeTransaction = await protocolKit.signTransaction(
+      safeTransaction,
+      SigningMethod.ETH_SIGN_TYPED_DATA_V4,
+    );
+
     const safeTxHash = await protocolKit.getTransactionHash(safeTransaction);
     log(`safeTxHash: ${safeTxHash}`);
 
-    const signature = await protocolKit.signHash(safeTxHash);
+    let signature = signedSafeTransaction.getSignature(signerAddress);
+    if (!signature?.data && signedSafeTransaction.signatures?.size) {
+      signature = signedSafeTransaction.signatures.values().next().value;
+    }
+    if (!signature?.data) {
+      throw new Error("No signature returned; is this Ledger account a Safe owner?");
+    }
     log(`Signature obtained: ${signature.data.slice(0, 20)}…`);
 
     // ── Submit proposal to Safe Transaction Service ─────────────────
+    if (!SAFE_API_KEY?.trim()) {
+      throw new Error(
+        "Missing VITE_SAFE_API_KEY. Add it to leger_integration/.env (see https://developer.safe.global).",
+      );
+    }
+
     log("Submitting proposal to Safe Transaction Service…");
     $btnPropose.textContent = "Submitting proposal…";
 
-    const apiKit = new SafeApiKit({ chainId: BigInt(CHAIN_ID) });
+    const apiKit = new SafeApiKit({
+      chainId: BigInt(CHAIN_ID),
+      apiKey: SAFE_API_KEY.trim(),
+    });
 
     await apiKit.proposeTransaction({
       safeAddress: SAFE_ADDRESS,
