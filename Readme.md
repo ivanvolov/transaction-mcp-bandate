@@ -1,0 +1,1 @@
+First I need to create a tool witch connects to SAFE wallet thow MCP and suggest trnsactions.
