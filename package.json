@@ -5,7 +5,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node index.mjs"
+    "start": "node index.mjs",
+    "mcp": "node index.mjs --mcp",
+    "dev": "node index.mjs --dev"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
