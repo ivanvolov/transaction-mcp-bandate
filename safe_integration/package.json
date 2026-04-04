@@ -3,11 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "sign-latest": "node ./sign-latest-proposed.mjs"
+    "mcp": "node ./mcp/safeMcp.mjs",
+    "mcp:dev": "node ./mcp/safeMcp.mjs --dev"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@safe-global/api-kit": "^4.0.1",
-    "@safe-global/protocol-kit": "^6.0.0",
     "dotenv": "^16.4.5"
   }
 }

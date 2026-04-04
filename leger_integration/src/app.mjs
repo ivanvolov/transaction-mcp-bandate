@@ -7,6 +7,9 @@ import { SigningMethod } from "@safe-global/types-kit";
 // ── Config ──────────────────────────────────────────────────────────────
 // Vite: set VITE_SAFE_API_KEY in .env (required by Safe Transaction Service API).
 const SAFE_API_KEY = import.meta.env.VITE_SAFE_API_KEY;
+const MONITOR_BASE = (
+  import.meta.env.VITE_MONITOR_API_URL || "http://127.0.0.1:3847"
+).replace(/\/$/, "");
 
 const SAFE_ADDRESS = "0xe4522AcE60ccE4658751024310FF04f84daf8149";
 const CHAIN_ID = 42161; // Arbitrum One
@@ -35,6 +38,8 @@ const $account = document.getElementById("account");
 const $chainId = document.getElementById("chainId");
 const $safeAddr = document.getElementById("safeAddr");
 const $usdcAddr = document.getElementById("usdcAddr");
+const $queueList = document.getElementById("queueList");
+const $btnRefreshQueue = document.getElementById("btnRefreshQueue");
 
 // Show static info
 $safeAddr.textContent = SAFE_ADDRESS;
@@ -46,6 +51,84 @@ function log(msg) {
   $log.scrollTop = $log.scrollHeight;
   console.log(msg);
 }
+
+async function refreshLedgerQueue() {
+  if (!$queueList) return;
+  try {
+    const res = await fetch(`${MONITOR_BASE}/api/ledger-queue`);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const data = await res.json();
+    const items = data.items ?? [];
+    if (items.length === 0) {
+      $queueList.innerHTML =
+        '<p style="color:#484f58;font-size:0.85rem;">No items. Accept a tx in Telegram first.</p>';
+      return;
+    }
+    $queueList.innerHTML = items
+      .map(
+        (i) => `
+      <div class="queue-row">
+        <div class="queue-meta">
+          <div class="queue-hash">${i.safeTxHash}</div>
+          <div>nonce ${i.nonce ?? "—"} · to ${(i.to ?? "").slice(0, 10)}… · added ${(i.addedAt ?? "").slice(0, 19) || "—"}</div>
+        </div>
+        <button type="button" class="small secondary sign-queue-btn" data-hash="${i.safeTxHash}">Sign on Ledger</button>
+      </div>`,
+      )
+      .join("");
+    $queueList.querySelectorAll(".sign-queue-btn").forEach((btn) => {
+      btn.addEventListener("click", () => signQueuedTx(btn.dataset.hash));
+    });
+  } catch (e) {
+    $queueList.innerHTML = `<p style="color:#f85149;font-size:0.85rem;">Queue unavailable: ${e.message}. Run <code style="color:#8b949e">npm run monitor</code> in safe_integration (${MONITOR_BASE}).</p>`;
+  }
+}
+
+async function signQueuedTx(safeTxHash) {
+  if (!provider || !signerAddress) {
+    log("Connect Ledger first.");
+    return;
+  }
+  if (!SAFE_API_KEY?.trim()) {
+    log("Missing VITE_SAFE_API_KEY.");
+    return;
+  }
+  try {
+    log(`Loading queued tx ${safeTxHash.slice(0, 14)}…`);
+    const apiKit = new SafeApiKit({
+      chainId: BigInt(CHAIN_ID),
+      apiKey: SAFE_API_KEY.trim(),
+    });
+    const multisigTx = await apiKit.getTransaction(safeTxHash);
+    const protocolKit = await Safe.init({
+      provider,
+      signer: signerAddress,
+      safeAddress: SAFE_ADDRESS,
+    });
+    log("Confirm EIP-712 signature on Ledger…");
+    const signed = await protocolKit.signTransaction(
+      multisigTx,
+      SigningMethod.ETH_SIGN_TYPED_DATA_V4,
+    );
+    let sig = signed.getSignature(signerAddress);
+    if (!sig?.data && signed.signatures?.size) {
+      sig = signed.signatures.values().next().value;
+    }
+    if (!sig?.data) throw new Error("No signature from Ledger");
+    await apiKit.confirmTransaction(safeTxHash, sig.data);
+    log("Confirmation submitted to Safe Transaction Service.");
+    await fetch(
+      `${MONITOR_BASE}/api/ledger-queue/${encodeURIComponent(safeTxHash)}`,
+      { method: "DELETE" },
+    );
+    log("Removed from local queue.");
+    await refreshLedgerQueue();
+  } catch (e) {
+    log(`Sign queue error: ${e.message}`);
+  }
+}
+
+$btnRefreshQueue?.addEventListener("click", () => refreshLedgerQueue());
 
 // ── Ledger provider state ───────────────────────────────────────────────
 let provider = null;
@@ -224,3 +307,5 @@ $btnPropose.addEventListener("click", async () => {
     $btnPropose.disabled = false;
   }
 });
+
+void refreshLedgerQueue();
