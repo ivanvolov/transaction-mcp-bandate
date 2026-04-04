@@ -1,6 +1,6 @@
 # Safe MCP server
 
-One MCP server with two tools and two modes. That's it.
+One MCP server with two tools and two modes. Runs over HTTP so you can ngrok it.
 
 ## Tools
 
@@ -24,23 +24,39 @@ Reject is intentionally a no-op — the tx stays on-chain and keeps showing in `
 cd safe_integration
 cp .env.example .env   # add SAFE_API_KEY
 npm install
+npm run mcp            # starts on http://127.0.0.1:3847/mcp
 ```
 
-## Cursor MCP config (stdio)
+Override the port with `MCP_PORT` env var (default `3847`).
+
+## Expose via ngrok
+
+```bash
+ngrok http 3847
+```
+
+Then use the ngrok URL + `/mcp` as your MCP endpoint, e.g. `https://abc123.ngrok-free.app/mcp`.
+
+## MCP client config (Streamable HTTP)
 
 ```json
 {
   "mcpServers": {
     "safe-agent": {
-      "command": "node",
-      "args": ["/FULL/PATH/safe_integration/mcp/safeMcp.mjs"],
-      "cwd": "/FULL/PATH/safe_integration"
+      "url": "http://127.0.0.1:3847/mcp"
     }
   }
 }
 ```
 
-Add `"--dev"` to `args` for dev mode.
+For ngrok, replace the URL with your ngrok forwarding address.
+
+## Endpoints
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/mcp` | POST / GET / DELETE | MCP Streamable HTTP transport |
+| `/health` | GET | Health check — returns Safe address + chain |
 
 ## Files
 
