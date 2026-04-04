@@ -1,0 +1,65 @@
+# ── Safe Transaction Firewall Rules ──────────────────────────────────────
+# Transactions are evaluated top-down. First match wins.
+#
+#   auto-approve  →  straight to Ledger queue for signing
+#   auto-reject   →  sent to Telegram, flagged as blocked
+#   ask           →  passed to agent (MCP) or human (dev CLI)
+#
+# Edit this file or use the safe_update_rules MCP tool.
+
+whitelist:
+  # Addresses that are always safe to send to (within limits)
+  - address: "0x156D1aBD1F207f73a6ef13EF22E862Fc141156bD"
+    label: "Team wallet (signer)"
+    max_value_per_tx: "500000000000000000"   # 0.5 ETH
+
+  # - address: "0x..."
+  #   label: "Treasury"
+  #   max_value_per_tx: "1000000000000000000"  # 1 ETH
+
+known_contracts:
+  # Known DeFi / protocol contracts with allowed methods
+  # If a tx calls an unlisted method on a known contract → ask
+
+  - address: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
+    label: "Uniswap V3 SwapRouter02 (Arbitrum)"
+    allowed_methods:
+      - "exactInputSingle"
+      - "exactInput"
+      - "exactOutputSingle"
+      - "exactOutput"
+      - "multicall"
+    max_value_per_tx: "0"                     # swaps shouldn't send native ETH
+
+  - address: "0xE592427A0AEce92De3Edee1F18E0157C05861564"
+    label: "Uniswap V3 SwapRouter (Arbitrum)"
+    allowed_methods:
+      - "exactInputSingle"
+      - "exactInput"
+      - "exactOutputSingle"
+      - "exactOutput"
+      - "multicall"
+    max_value_per_tx: "0"
+
+  - address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+    label: "Uniswap V3 Factory (Arbitrum)"
+    allowed_methods:
+      - "createPool"
+    max_value_per_tx: "0"
+
+  # - address: "0x..."
+  #   label: "Aave V3 Pool"
+  #   allowed_methods:
+  #     - "supply"
+  #     - "withdraw"
+  #     - "borrow"
+  #     - "repay"
+  #   max_value_per_tx: "1000000000000000000"
+
+daily_caps:
+  max_total_value: "2000000000000000000"      # 2 ETH total per day
+  max_tx_count: 50                            # max approved txs per day
+
+# What to do when no rule matches
+# "ask" = defer to agent/human, "reject" = auto-reject unknown targets
+default_action: "ask"

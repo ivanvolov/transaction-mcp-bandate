@@ -15,6 +15,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "inquirer": "^9.2.22",
+    "js-yaml": "^4.1.1",
     "node-telegram-bot-api": "^0.66.0",
     "zod": "^3.23.8"
   }

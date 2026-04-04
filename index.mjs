@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import yaml from "js-yaml";
 import express from "express";
 import inquirer from "inquirer";
 import TelegramBot from "node-telegram-bot-api";
@@ -17,13 +18,14 @@ import SafeApiKit from "@safe-global/api-kit";
 import { config } from "./config.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const LEDGER_QUEUE = join(__dirname, "ledger-queue.json");
+const LEDGER_QUEUE  = join(__dirname, "ledger-queue.json");
+const RULES_FILE    = join(__dirname, "rules.yml");
+const DAILY_FILE    = join(__dirname, "daily-stats.json");
 
 dotenv.config();
 
 // ── arg parsing ───────────────────────────────────────────────────────────
 const args = new Set(process.argv.slice(2));
-
 const inputMode = args.has("--mcp") ? "mcp" : args.has("--dev") ? "dev" : null;
 
 if (!inputMode) {
@@ -33,8 +35,9 @@ if (!inputMode) {
     "  --mcp   MCP server for AI agents (HTTP, Streamable HTTP transport)",
     "  --dev   Interactive CLI with arrow-key approve/reject",
     "",
-    "Approve → Ledger queue (sign at http://127.0.0.1:LEDGER_PORT)",
-    "Reject  → Telegram bot for human review",
+    "Flow:  tx → rules.yml check → auto-approve / auto-reject / ask human",
+    "  Approve → Ledger queue (sign at http://127.0.0.1:LEDGER_PORT)",
+    "  Reject  → Telegram bot for human review",
   ].join("\n"));
   process.exit(1);
 }
@@ -117,6 +120,148 @@ async function approve(safeTxHash, source) {
   const tx = await apiKit.getTransaction(safeTxHash);
   if (!tx?.safeTxHash) throw new Error(`Tx not found: ${safeTxHash}`);
   await appendQueue(tx, source);
+  await recordDailyApproval(tx.value ?? "0");
+}
+
+// ── Rules engine ─────────────────────────────────────────────────────────
+async function loadRules() {
+  try {
+    const raw = await readFile(RULES_FILE, "utf8");
+    return yaml.load(raw) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveRules(rules) {
+  await writeFile(RULES_FILE, yaml.dump(rules, { lineWidth: 120 }), "utf8");
+}
+
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function loadDailyStats() {
+  const stats = await readJson(DAILY_FILE, { date: null, totalValue: "0", txCount: 0 });
+  if (stats.date !== todayKey()) {
+    return { date: todayKey(), totalValue: "0", txCount: 0 };
+  }
+  return stats;
+}
+
+async function recordDailyApproval(value) {
+  const stats = await loadDailyStats();
+  stats.totalValue = String(BigInt(stats.totalValue) + BigInt(value || "0"));
+  stats.txCount += 1;
+  await writeJson(DAILY_FILE, stats);
+}
+
+/**
+ * Evaluate a transaction against rules.yml.
+ * Returns { action: "approve" | "reject" | "ask", reason: string, matchedRule: string }
+ */
+async function evaluateTransaction(tx) {
+  const rules = await loadRules();
+  const to = (tx.to ?? "").toLowerCase();
+  const value = BigInt(tx.value ?? "0");
+  const method = tx.dataDecoded?.method ?? null;
+
+  // 1. Check daily caps first (hard limits)
+  if (rules.daily_caps) {
+    const stats = await loadDailyStats();
+    const { max_total_value, max_tx_count } = rules.daily_caps;
+
+    if (max_tx_count && stats.txCount >= max_tx_count) {
+      return {
+        action: "reject",
+        reason: `Daily tx count limit reached (${stats.txCount}/${max_tx_count})`,
+        matchedRule: "daily_caps.max_tx_count",
+      };
+    }
+
+    if (max_total_value) {
+      const cap = BigInt(max_total_value);
+      const spent = BigInt(stats.totalValue);
+      if (spent + value > cap) {
+        return {
+          action: "reject",
+          reason: `Daily value cap exceeded (spent ${stats.totalValue} + tx ${tx.value} > cap ${max_total_value})`,
+          matchedRule: "daily_caps.max_total_value",
+        };
+      }
+    }
+  }
+
+  // 2. Check whitelisted addresses
+  if (rules.whitelist) {
+    for (const entry of rules.whitelist) {
+      if (entry.address.toLowerCase() !== to) continue;
+
+      if (entry.max_value_per_tx) {
+        const maxVal = BigInt(entry.max_value_per_tx);
+        if (value > maxVal) {
+          return {
+            action: "reject",
+            reason: `Whitelisted "${entry.label}" but value ${tx.value} exceeds per-tx limit ${entry.max_value_per_tx}`,
+            matchedRule: `whitelist[${entry.label}].max_value_per_tx`,
+          };
+        }
+      }
+
+      return {
+        action: "approve",
+        reason: `Whitelisted address: ${entry.label}`,
+        matchedRule: `whitelist[${entry.label}]`,
+      };
+    }
+  }
+
+  // 3. Check known contracts
+  if (rules.known_contracts) {
+    for (const entry of rules.known_contracts) {
+      if (entry.address.toLowerCase() !== to) continue;
+
+      if (entry.max_value_per_tx) {
+        const maxVal = BigInt(entry.max_value_per_tx);
+        if (value > maxVal) {
+          return {
+            action: "reject",
+            reason: `Known contract "${entry.label}" but native value ${tx.value} exceeds limit ${entry.max_value_per_tx}`,
+            matchedRule: `known_contracts[${entry.label}].max_value_per_tx`,
+          };
+        }
+      }
+
+      if (method && entry.allowed_methods?.length) {
+        if (entry.allowed_methods.includes(method)) {
+          return {
+            action: "approve",
+            reason: `Known contract "${entry.label}", method "${method}" is allowed`,
+            matchedRule: `known_contracts[${entry.label}].${method}`,
+          };
+        }
+        return {
+          action: "reject",
+          reason: `Known contract "${entry.label}" but method "${method}" is NOT in allowed list [${entry.allowed_methods.join(", ")}]`,
+          matchedRule: `known_contracts[${entry.label}].allowed_methods`,
+        };
+      }
+
+      return {
+        action: "approve",
+        reason: `Known contract: ${entry.label} (no method restrictions)`,
+        matchedRule: `known_contracts[${entry.label}]`,
+      };
+    }
+  }
+
+  // 4. Default action
+  const defaultAction = rules.default_action ?? "ask";
+  return {
+    action: defaultAction,
+    reason: `No rule matched for ${tx.to} — default: ${defaultAction}`,
+    matchedRule: "default_action",
+  };
 }
 
 // ── Telegram bot (reject → human review) ─────────────────────────────────
@@ -125,7 +270,6 @@ bot.on("polling_error", (err) => {
   console.error("[telegram] Polling error:", err.message);
 });
 
-// Telegram callback_data limited to 64 bytes; map short key → full hash
 const hashLookup = new Map();
 function shortKey(safeTxHash) {
   const key = safeTxHash.slice(2, 12);
@@ -145,12 +289,13 @@ function formatTxMessage(s) {
   );
 }
 
-async function sendRejectionToTelegram(safeTxHash, source) {
+async function sendRejectionToTelegram(safeTxHash, source, reason) {
   const tx = await apiKit.getTransaction(safeTxHash);
   if (!tx?.safeTxHash) return;
   const s = summarize(tx);
   const sk = shortKey(tx.safeTxHash);
-  const text = `⚠️ *Rejected by ${source}* — review required\n\n${formatTxMessage(s)}`;
+  const reasonLine = reason ? `\nReason: _${reason}_` : "";
+  const text = `⚠️ *Rejected by ${source}*${reasonLine}\n\n${formatTxMessage(s)}`;
   try {
     await bot.sendMessage(telegramChatId, text, {
       parse_mode: "Markdown",
@@ -227,12 +372,19 @@ async function startMcpInput() {
   mcpServer.registerTool(
     "safe_list_pending",
     {
-      description: `List unexecuted (pending) multisig transactions for Safe ${safeAddress} on chain ${chainId}.`,
+      description:
+        `List unexecuted (pending) multisig transactions for Safe ${safeAddress} on chain ${chainId}. ` +
+        `Each transaction includes a "rulesVerdict" from rules.yml showing whether it was auto-approved, auto-rejected, or needs your decision.`,
       inputSchema: {},
     },
     async () => {
       const txs = await listPending();
-      const payload = { safeAddress, chainId, count: txs.length, transactions: txs.map(summarize) };
+      const results = [];
+      for (const tx of txs) {
+        const verdict = await evaluateTransaction(tx);
+        results.push({ ...summarize(tx), rulesVerdict: verdict });
+      }
+      const payload = { safeAddress, chainId, count: results.length, transactions: results };
       return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
     }
   );
@@ -243,21 +395,59 @@ async function startMcpInput() {
       description:
         "Approve or reject a pending Safe tx. " +
         "Approve → added to Ledger queue for hardware signing. " +
-        "Reject → sent to Telegram for human review.",
+        "Reject → sent to Telegram for human review. " +
+        "Note: rules.yml may have already auto-decided this tx.",
       inputSchema: {
         safeTxHash: z.string().describe("0x-prefixed Safe tx hash"),
         decision:   z.enum(["approve", "reject"]).describe("approve or reject"),
+        reason:     z.string().optional().describe("Why this decision was made"),
       },
     },
-    async ({ safeTxHash, decision }) => {
+    async ({ safeTxHash, decision, reason }) => {
       if (decision === "approve") {
         await approve(safeTxHash, "mcp");
       } else {
-        await sendRejectionToTelegram(safeTxHash, "agent");
+        await sendRejectionToTelegram(safeTxHash, "agent", reason);
       }
       return {
         content: [{ type: "text", text: JSON.stringify({ ok: true, safeTxHash, decision }, null, 2) }],
       };
+    }
+  );
+
+  mcpServer.registerTool(
+    "safe_get_rules",
+    {
+      description: "Read the current firewall rules (rules.yml). Returns the YAML content and parsed JSON.",
+      inputSchema: {},
+    },
+    async () => {
+      const rules = await loadRules();
+      const raw = await readFile(RULES_FILE, "utf8").catch(() => "# empty");
+      return { content: [{ type: "text", text: JSON.stringify({ rules, raw_yaml: raw }, null, 2) }] };
+    }
+  );
+
+  mcpServer.registerTool(
+    "safe_update_rules",
+    {
+      description:
+        "Update the firewall rules. Pass the full YAML content. " +
+        "Supports: whitelist (addresses + per-tx limits), known_contracts (address + allowed_methods), " +
+        "daily_caps (max_total_value, max_tx_count), default_action (ask/reject).",
+      inputSchema: {
+        yaml_content: z.string().describe("Full YAML content to write to rules.yml"),
+      },
+    },
+    async ({ yaml_content }) => {
+      try {
+        yaml.load(yaml_content);
+      } catch (e) {
+        return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: `Invalid YAML: ${e.message}` }) }] };
+      }
+      await writeFile(RULES_FILE, yaml_content, "utf8");
+      const rules = await loadRules();
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, rules }, null, 2) }] };
     }
   );
 
@@ -315,7 +505,24 @@ async function startDevInput() {
       console.log(`[dev] Found ${txs.length} pending transaction(s).\n`);
 
       for (const tx of txs) {
-        console.log(JSON.stringify(summarize(tx), null, 2));
+        const verdict = await evaluateTransaction(tx);
+        const s = summarize(tx);
+
+        console.log(JSON.stringify(s, null, 2));
+        console.log(`  Rules verdict: ${verdict.action.toUpperCase()} — ${verdict.reason}`);
+        console.log(`  Matched rule:  ${verdict.matchedRule}\n`);
+
+        if (verdict.action === "approve") {
+          await approve(tx.safeTxHash, `rules:${verdict.matchedRule}`);
+          console.log(`  ✓ Auto-approved by rules — added to ledger-queue.json\n`);
+          continue;
+        }
+
+        if (verdict.action === "reject") {
+          await sendRejectionToTelegram(tx.safeTxHash, "rules", verdict.reason);
+          console.log(`  ✗ Auto-rejected by rules — sent to Telegram\n`);
+          continue;
+        }
 
         const { decision } = await inquirer.prompt([
           {
@@ -363,7 +570,14 @@ async function startDevInput() {
 
 // ── main ──────────────────────────────────────────────────────────────────
 async function main() {
+  const rules = await loadRules();
+  const wlCount = rules.whitelist?.length ?? 0;
+  const kcCount = rules.known_contracts?.length ?? 0;
+
   console.log(`Starting: mode=${inputMode}`);
+  console.log(`  Rules loaded: ${wlCount} whitelisted, ${kcCount} known contracts`);
+  console.log(`  Daily caps: ${rules.daily_caps?.max_total_value ?? "none"} value, ${rules.daily_caps?.max_tx_count ?? "none"} txs`);
+  console.log(`  Default: ${rules.default_action ?? "ask"}`);
   console.log(`  Approve → Ledger queue → sign at http://127.0.0.1:${LEDGER_PORT}`);
   console.log(`  Reject  → Telegram bot for human review\n`);
 
