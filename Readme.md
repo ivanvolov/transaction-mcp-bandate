@@ -1,11 +1,11 @@
-# Safe & Ledger MCP Transaction Proposer
+# Ledger Transaction Proposer via MCP
 
-This project provides a script to propose transactions to a **Safe (formerly Gnosis Safe)** wallet and optionally sign them using a **Ledger** device via a Model Context Protocol (MCP) server.
+This project provides a script to craft and propose transactions to a **Ledger** hardware device using a Model Context Protocol (MCP) server.
 
 ## Features
-- **Safe Wallet Integration**: Uses `@safe-global/protocol-kit` and `@safe-global/api-kit` to propose transactions to the Safe Transaction Service.
-- **MCP Ledger Support**: Includes an example of how to connect to an MCP server (like `mcp-ledger`) to sign transactions with a hardware device.
-- **TypeScript Ready**: Built with TypeScript for type safety and modern development.
+- **Transaction Crafting**: Uses `ethers.js` to create and serialize unsigned Ethereum transactions.
+- **MCP Ledger Integration**: Demonstrates how to connect to an MCP server (like `mcp-ledger`) to sign transactions with a hardware device.
+- **TypeScript Ready**: Built with TypeScript for modern development.
 
 ## Setup
 
@@ -20,55 +20,55 @@ This project provides a script to propose transactions to a **Safe (formerly Gno
    npm install
    ```
 
-3. **Configure environment variables**:
-   Create a `.env` file with the following:
-   ```env
-   RPC_URL=https://eth-mainnet.g.alchemy.com/v2/your-api-key
-   SIGNER_PRIVATE_KEY=0xYourSafeOwnerPrivateKey
-   ```
+## Testing the Ledger Workflow
 
-## Usage
+To test the workflow of proposing a transaction to your Ledger device, follow these steps:
 
-The main logic is in `src/index.ts`. You can use the `SafeTransactionProposalClient` class to connect to a Safe and propose transactions.
+### 1. Prerequisites
+- **A Ledger Device**: Connected to your computer and the Ethereum app opened.
+- **An MCP Ledger Server**: You should have the `mcp-ledger` server installed and built on your machine.
+- **Node.js**: Installed on your system.
 
-### Propose a Transaction
-```typescript
-import SafeTransactionProposalClient from './src/index.js';
+### 2. Configure the Test Script
+Open `src/index.ts` and locate the `test()` function at the bottom. Uncomment it and update the following:
+- **RPC URL**: Provide a valid Ethereum RPC URL (e.g., from Alchemy or Infura).
+- **MCP Server Path**: Update the `proposeToLedger` call with the actual path to your `mcp-ledger/dist/index.js` file.
 
-const client = new SafeTransactionProposalClient(
-  "https://eth-mainnet.g.alchemy.com/v2/your-api-key",
-  1n, // Mainnet
-  "https://safe-transaction-mainnet.safe.global"
-);
-
-await client.connectSafe("0xYourSafeAddress");
-
-// Propose a 0.01 ETH transfer
-await client.proposeTransaction(
-  "0xRecipientAddress",
-  ethers.parseEther("0.01").toString(),
-  "0x",
-  process.env.SIGNER_PRIVATE_KEY
-);
-```
-
-### Sign with Ledger via MCP
-If you have an MCP server like `mcp-ledger` running, you can call it to sign:
-```typescript
-await client.signWithLedgerMCP(
-  "node", 
-  ["path/to/mcp-ledger/dist/index.js"], 
-  "0xRawTransactionData"
-);
-```
-
-## Development
-To run in development mode:
+### 3. Run the Test
+You can run the script using `npm run dev`:
 ```bash
 npm run dev
 ```
 
-To build:
+### What Happens During the Test?
+1. **Crafting**: The script creates a simple transfer of 0.001 ETH to the zero address and serializes it as an unsigned transaction hex string.
+2. **Connecting**: It starts the `mcp-ledger` server as a child process using the MCP SDK.
+3. **Proposing**: It calls the `sign_transaction` tool on the MCP server, passing the unsigned transaction hex.
+4. **Signing**: Your Ledger device will prompt you to review and sign the transaction.
+5. **Result**: Once signed, the script will log the signed transaction components (v, r, s) returned by the Ledger.
+
+### Code Example
+```typescript
+import LedgerTransactionProposer from './src/index.js';
+
+const proposer = new LedgerTransactionProposer("https://eth-mainnet.public.blastapi.io");
+
+// 1. Craft an unsigned transaction hex
+const unsignedTx = await proposer.craftTransaction(
+  "0x0000000000000000000000000000000000000000", // Recipient
+  "0.001" // Value in ETH
+);
+
+// 2. Propose to Ledger via MCP server
+await proposer.proposeToLedger(
+  "node", 
+  ["/absolute/path/to/mcp-ledger/dist/index.js"], 
+  unsignedTx
+);
+```
+
+## Development
+To build the project:
 ```bash
 npm run build
 ```

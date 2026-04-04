@@ -1,150 +1,112 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ethers } from "ethers";
-import Safe, { SafeFactory, SafeAccountConfig } from "@safe-global/protocol-kit";
-import SafeApiKit from "@safe-global/api-kit";
-import { MetaTransactionData, SafeTransactionDataPartial } from "@safe-global/safe-core-sdk-types";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 /**
- * SafeTransactionProposalClient
+ * LedgerTransactionProposer
  * 
- * This script demonstrates how to:
- * 1. Propose a transaction to a Safe wallet.
- * 2. Optionally use an MCP server (like mcp-ledger) to sign the transaction.
+ * This script focuses on proposing transactions to a Ledger device via an MCP server.
  */
-class SafeTransactionProposalClient {
-  private safeApiKit: SafeApiKit;
-  private protocolKit: Safe | null = null;
+class LedgerTransactionProposer {
   private rpcUrl: string;
-  private chainId: bigint;
 
-  constructor(rpcUrl: string, chainId: bigint, txServiceUrl: string) {
+  constructor(rpcUrl: string) {
     this.rpcUrl = rpcUrl;
-    this.chainId = chainId;
-    this.safeApiKit = new SafeApiKit({
-      chainId: chainId,
-      txServiceUrl: txServiceUrl
-    });
   }
 
   /**
-   * Connects to a Safe wallet.
+   * Craft a raw transaction for signing.
    */
-  async connectSafe(safeAddress: string, signer?: any) {
+  async craftTransaction(to: string, value: string, data: string = "0x") {
     const provider = new ethers.JsonRpcProvider(this.rpcUrl);
-    const signerOrProvider = signer ? new ethers.Wallet(signer, provider) : provider;
-    this.protocolKit = await Safe.init({
-      provider: this.rpcUrl,
-      safeAddress: safeAddress
-    });
-    console.log(`Connected to Safe at ${safeAddress}`);
-  }
-
-  /**
-   * Proposes a transaction to the Safe Transaction Service.
-   */
-  async proposeTransaction(to: string, value: string, data: string, signer: any) {
-    if (!this.protocolKit) throw new Error("Safe not connected");
-
-    const safeTransactionData: SafeTransactionDataPartial = {
+    
+    // For a real transaction, we'd need to fetch nonce and gas parameters
+    // This is a simplified example for crafting a transaction object
+    const tx = {
       to,
-      value,
+      value: ethers.parseEther(value),
       data,
+      chainId: (await provider.getNetwork()).chainId,
+      nonce: 0, // In a real scenario, fetch this from provider.getTransactionCount(from)
+      gasLimit: 21000,
+      maxFeePerGas: ethers.parseUnits("20", "gwei"),
+      maxPriorityFeePerGas: ethers.parseUnits("1", "gwei"),
+      type: 2 // EIP-1559
     };
 
-    // Re-initialize protocolKit with a signer to sign the transaction
-    const provider = new ethers.JsonRpcProvider(this.rpcUrl);
-    const wallet = new ethers.Wallet(signer, provider);
-    this.protocolKit = await this.protocolKit.connect({ provider: provider, signer: wallet });
-
-    const safeTransaction = await this.protocolKit.createTransaction({ 
-        transactions: [safeTransactionData]
-    });
-
-    const safeTxHash = await this.protocolKit.getTransactionHash(safeTransaction);
-    const senderSignature = await this.protocolKit.signHash(safeTxHash);
-
-    const safeAddress = await this.protocolKit.getAddress();
-
-    await this.safeApiKit.proposeTransaction({
-      safeAddress,
-      safeTransactionData: safeTransaction.data,
-      safeTxHash,
-      senderAddress: await wallet.getAddress(),
-      senderSignature: senderSignature.data,
-    });
-
-    console.log(`Transaction proposed! Hash: ${safeTxHash}`);
-    return safeTxHash;
+    return ethers.Transaction.from(tx).unsignedSerialized;
   }
 
   /**
-   * Example of calling an MCP server to sign a transaction with a Ledger device.
+   * Proposes a transaction to a Ledger device via an MCP server.
+   * 
+   * @param mcpServerCommand The command to start the MCP server (e.g., 'node')
+   * @param mcpServerArgs Arguments for the command (e.g., ['path/to/mcp-ledger/dist/index.js'])
+   * @param unsignedTx The unsigned serialized transaction hex string
    */
-  async signWithLedgerMCP(mcpServerCommand: string, mcpServerArgs: string[], transactionData: string) {
+  async proposeToLedger(mcpServerCommand: string, mcpServerArgs: string[], unsignedTx: string) {
     console.log("Connecting to Ledger MCP server...");
+    
     const transport = new StdioClientTransport({
       command: mcpServerCommand,
       args: mcpServerArgs,
     });
 
     const client = new Client(
-      { name: "safe-ledger-client", version: "1.0.0" },
+      { name: "ledger-proposer-client", version: "1.0.0" },
       { capabilities: {} }
     );
 
-    await client.connect(transport);
-    console.log("Connected to Ledger MCP server.");
+    try {
+      await client.connect(transport);
+      console.log("Connected to Ledger MCP server.");
 
-    // Assuming the MCP server has a 'sign_transaction' tool
-    const result = await client.callTool({
-      name: "sign_transaction",
-      arguments: {
-        transactionData: transactionData,
-        derivationPath: "44'/60'/0'/0/0" // Default Ledger path
-      }
-    });
+      console.log("Sending transaction to Ledger for signing...");
+      // Using the 'sign_transaction' tool from the mcp-ledger server
+      const result = await client.callTool({
+        name: "sign_transaction",
+        arguments: {
+          transactionData: unsignedTx,
+          derivationPath: "44'/60'/0'/0/0" // Standard Ethereum derivation path
+        }
+      });
 
-    console.log("Ledger signature result:", result);
-    return result;
+      console.log("Ledger Response:", JSON.stringify(result, null, 2));
+      return result;
+    } catch (error) {
+      console.error("Error during Ledger proposal:", error);
+      throw error;
+    } finally {
+      // Close transport if needed (SDK handles most cleanup)
+    }
   }
 }
 
-// Example usage (uncomment and fill details to run)
+// Example for local testing
 /*
-async function main() {
-  const client = new SafeTransactionProposalClient(
-    process.env.RPC_URL || "https://eth-mainnet.g.alchemy.com/v2/your-api-key",
-    1n, // Mainnet
-    "https://safe-transaction-mainnet.safe.global"
+async function test() {
+  const proposer = new LedgerTransactionProposer("https://eth-mainnet.public.blastapi.io");
+  
+  // 1. Craft an unsigned transaction
+  const unsignedTx = await proposer.craftTransaction(
+    "0x0000000000000000000000000000000000000000", // Recipient
+    "0.001" // Value in ETH
   );
+  
+  console.log("Unsigned Transaction Hex:", unsignedTx);
 
-  const safeAddress = "0xYourSafeAddress";
-  // A signer is needed to propose a transaction. This should be one of the Safe owners.
-  const signerPrivateKey = process.env.SIGNER_PRIVATE_KEY;
-  if (!signerPrivateKey) {
-      throw new Error("SIGNER_PRIVATE_KEY environment variable not set.");
-  }
-
-  await client.connectSafe(safeAddress);
-
-  // Propose a simple transfer
-  await client.proposeTransaction(
-    "0xRecipientAddress",
-    ethers.parseEther("0.01").toString(),
-    "0x",
-    signerPrivateKey
-  );
-
-  // If you want to sign with Ledger via MCP:
-  // const rawTx = "0xYourRawTxData";
-  // await client.signWithLedgerMCP("node", ["path/to/mcp-ledger/dist/index.js"], rawTx);
+  // 2. Propose to Ledger (Update paths to your local mcp-ledger installation)
+  // await proposer.proposeToLedger(
+  //   "node", 
+  //   ["/path/to/mcp-ledger/dist/index.js"], 
+  //   unsignedTx
+  // );
 }
 
-main().catch(console.error);
+test().catch(console.error);
 */
 
-export default SafeTransactionProposalClient;
+export default LedgerTransactionProposer;
