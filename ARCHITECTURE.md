@@ -153,14 +153,18 @@ Single HTML file. No build step. No bundler. Human-readable code.
 - Plain HTML + inline CSS + inline `<script type="module">`
 - NO minified/bundled JavaScript files
 - NO hardcoded token amounts (no USDC, no "propose transfer" — it only signs queued transactions)
-- Uses `@aspect-build/ledger-connect-kit` via ESM CDN for EIP-6963 Ledger provider discovery
+- Connects DIRECTLY to Ledger hardware device via USB (WebHID) or Bluetooth (WebBLE)
+- Does NOT use browser wallet extensions (no Phantom, no MetaMask, no EIP-6963)
+- Uses `@ledgerhq/hw-transport-webhid` (USB) and `@ledgerhq/hw-transport-web-ble` (Bluetooth) via ESM CDN
+- Uses `@ledgerhq/hw-app-eth` to get address and sign EIP-712 hashed messages
 - Shows the Ledger queue with each item clearly marked as APPROVE or REJECT
 - Shows source (who made the decision: mcp, dev, rules, telegram-override)
 - Shows tx details: hash, nonce, to, value, method, timestamp
-- Connect Ledger button → `eth_requestAccounts`
-- Sign button per queue item → `eth_signTypedData_v4` with EIP-712 SafeTx typed data
+- Two connect buttons: "Connect via USB" and "Connect via Bluetooth"
+- Sign button per queue item → `signEIP712HashedMessage` with domain separator + struct hash
 - After successful signing, submits to `/api/safe-tx/:hash/confirm` and refreshes queue
 - Auto-refreshes queue every 10 seconds
+- Contains a standalone keccak-256 implementation (no external crypto dependency)
 
 ---
 

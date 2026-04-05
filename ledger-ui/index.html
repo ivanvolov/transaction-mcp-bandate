@@ -229,20 +229,11 @@
     <div id="log"></div>
   </div>
 
-  <script type="importmap">
-    {
-      "imports": {
-        "@ledgerhq/hw-transport-webhid": "https://esm.sh/@ledgerhq/hw-transport-webhid@6.29.4",
-        "@ledgerhq/hw-transport-web-ble": "https://esm.sh/@ledgerhq/hw-transport-web-ble@6.29.4",
-        "@ledgerhq/hw-app-eth": "https://esm.sh/@ledgerhq/hw-app-eth@6.39.0"
-      }
-    }
-  </script>
+  <!-- Buffer polyfill must load synchronously before Ledger bundle (SES/lockdown from wallet extensions strips globalThis) -->
+  <script src="./buffer-polyfill.js"></script>
 
   <script type="module">
-    import TransportWebHID from "@ledgerhq/hw-transport-webhid";
-    import TransportWebBLE from "@ledgerhq/hw-transport-web-ble";
-    import LedgerEth from "@ledgerhq/hw-app-eth";
+    import { TransportWebHID, TransportWebBLE, LedgerEth } from "./ledger-bundle.js";
 
     // ---------------------------------------------------------------------------
     // Config
