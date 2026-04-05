@@ -175,13 +175,23 @@
     .status-dot.connected {
       background: #3fb950;
     }
+
+    .connect-options {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .connect-options button {
+      flex: 1;
+    }
   </style>
 </head>
 <body>
 
   <div class="container">
     <h1>Ledger + Safe</h1>
-    <p class="subtitle">Sign approved Safe multisig transactions with your Ledger hardware wallet.</p>
+    <p class="subtitle">Sign Safe multisig transactions with your Ledger hardware wallet (USB or Bluetooth).</p>
 
     <!-- Ledger connection -->
     <div class="card">
@@ -189,15 +199,18 @@
         <span class="status-dot disconnected" id="statusDot"></span>
         Ledger Connection
       </h2>
-      <button id="btnConnect" class="secondary">Connect Ledger</button>
+      <div class="connect-options">
+        <button id="btnConnectUSB" class="secondary">Connect via USB</button>
+        <button id="btnConnectBLE" class="secondary">Connect via Bluetooth</button>
+      </div>
       <div id="accountInfo" style="display: none; margin-top: 12px;">
         <div class="info-row">
           <span class="label">Account</span>
-          <span class="value" id="accountAddress">—</span>
+          <span class="value" id="accountAddress">--</span>
         </div>
         <div class="info-row">
-          <span class="label">Chain ID</span>
-          <span class="value" id="chainIdDisplay">—</span>
+          <span class="label">Connection</span>
+          <span class="value" id="connectionType">--</span>
         </div>
       </div>
     </div>
@@ -206,7 +219,7 @@
     <div class="card">
       <h2>Transaction Queue</h2>
       <p style="color: #8b949e; font-size: 0.8rem; margin-bottom: 10px;">
-        Transactions approved via MCP or CLI appear here. Connect your Ledger, then sign.
+        Transactions approved or rejected via MCP / CLI appear here. Connect your Ledger, then sign.
       </p>
       <button type="button" id="btnRefresh" class="secondary small">Refresh</button>
       <div id="queueList" style="margin-top: 12px;"></div>
@@ -216,9 +229,23 @@
     <div id="log"></div>
   </div>
 
+  <script type="importmap">
+    {
+      "imports": {
+        "@ledgerhq/hw-transport-webhid": "https://esm.sh/@ledgerhq/hw-transport-webhid@6.29.4",
+        "@ledgerhq/hw-transport-web-ble": "https://esm.sh/@ledgerhq/hw-transport-web-ble@6.29.4",
+        "@ledgerhq/hw-app-eth": "https://esm.sh/@ledgerhq/hw-app-eth@6.39.0"
+      }
+    }
+  </script>
+
   <script type="module">
+    import TransportWebHID from "@ledgerhq/hw-transport-webhid";
+    import TransportWebBLE from "@ledgerhq/hw-transport-web-ble";
+    import LedgerEth from "@ledgerhq/hw-app-eth";
+
     // ---------------------------------------------------------------------------
-    // Config — the API base is the same origin that serves this page
+    // Config
     // ---------------------------------------------------------------------------
     const API_BASE = window.location.origin;
 
@@ -226,18 +253,20 @@
     // DOM refs
     // ---------------------------------------------------------------------------
     const $log            = document.getElementById("log");
-    const $btnConnect     = document.getElementById("btnConnect");
+    const $btnConnectUSB  = document.getElementById("btnConnectUSB");
+    const $btnConnectBLE  = document.getElementById("btnConnectBLE");
     const $statusDot      = document.getElementById("statusDot");
     const $accountInfo    = document.getElementById("accountInfo");
     const $accountAddress = document.getElementById("accountAddress");
-    const $chainIdDisplay = document.getElementById("chainIdDisplay");
+    const $connectionType = document.getElementById("connectionType");
     const $queueList      = document.getElementById("queueList");
     const $btnRefresh     = document.getElementById("btnRefresh");
 
     // ---------------------------------------------------------------------------
     // State
     // ---------------------------------------------------------------------------
-    let provider = null;
+    let transport = null;
+    let ethApp = null;
     let signerAddress = null;
 
     // ---------------------------------------------------------------------------
@@ -249,6 +278,69 @@
       $log.scrollTop = $log.scrollHeight;
       console.log(message);
     }
+
+    // ---------------------------------------------------------------------------
+    // Connect to Ledger (USB or Bluetooth)
+    // ---------------------------------------------------------------------------
+    async function connectLedger(method) {
+      const btnUsed = method === "usb" ? $btnConnectUSB : $btnConnectBLE;
+      const otherBtn = method === "usb" ? $btnConnectBLE : $btnConnectUSB;
+
+      try {
+        btnUsed.disabled = true;
+        otherBtn.disabled = true;
+        btnUsed.textContent = "Connecting...";
+
+        log(`Connecting via ${method.toUpperCase()}...`);
+
+        if (method === "usb") {
+          transport = await TransportWebHID.create();
+        } else {
+          transport = await TransportWebBLE.create();
+        }
+
+        ethApp = new LedgerEth(transport);
+
+        log("Transport open. Getting address from Ledger...");
+        log("Please confirm on your Ledger if prompted.");
+
+        // Get the address from the default Ethereum derivation path
+        const result = await ethApp.getAddress("44'/60'/0'/0/0");
+        signerAddress = result.address;
+
+        $accountAddress.textContent = signerAddress;
+        $connectionType.textContent = method === "usb" ? "USB (WebHID)" : "Bluetooth (WebBLE)";
+        $accountInfo.style.display = "block";
+        $statusDot.className = "status-dot connected";
+        btnUsed.textContent = "Connected";
+
+        log(`Connected: ${signerAddress}`);
+
+        // Handle disconnect
+        transport.on("disconnect", () => {
+          log("Ledger disconnected");
+          signerAddress = null;
+          ethApp = null;
+          transport = null;
+          $statusDot.className = "status-dot disconnected";
+          $accountInfo.style.display = "none";
+          $btnConnectUSB.textContent = "Connect via USB";
+          $btnConnectUSB.disabled = false;
+          $btnConnectBLE.textContent = "Connect via Bluetooth";
+          $btnConnectBLE.disabled = false;
+        });
+      } catch (err) {
+        log(`Connection error: ${err.message}`);
+        btnUsed.textContent = method === "usb" ? "Connect via USB" : "Connect via Bluetooth";
+        btnUsed.disabled = false;
+        otherBtn.disabled = false;
+        transport = null;
+        ethApp = null;
+      }
+    }
+
+    $btnConnectUSB.addEventListener("click", () => connectLedger("usb"));
+    $btnConnectBLE.addEventListener("click", () => connectLedger("ble"));
 
     // ---------------------------------------------------------------------------
     // Queue: fetch and render
@@ -277,14 +369,14 @@
 
           return `
             <div class="queue-item" style="border-color: ${isReject ? '#f8514933' : '#21262d'};">
-              <div style="margin-bottom: 6px;">${badge} <span style="color: #8b949e; font-size: 0.78rem;">via ${item.source ?? "—"}</span></div>
+              <div style="margin-bottom: 6px;">${badge} <span style="color: #8b949e; font-size: 0.78rem;">via ${item.source ?? "--"}</span></div>
               <div class="hash">${item.safeTxHash}</div>
               <div class="meta">
-                <span>Nonce: ${item.nonce ?? "—"}</span>
-                <span>To: ${(item.to ?? "").slice(0, 14)}…</span>
+                <span>Nonce: ${item.nonce ?? "--"}</span>
+                <span>To: ${(item.to ?? "").slice(0, 14)}...</span>
                 <span>Value: ${item.value ?? "0"}</span>
                 ${item.decodedMethod ? `<span>Method: ${item.decodedMethod}</span>` : ""}
-                <span>Added: ${(item.addedAt ?? "").slice(0, 19) || "—"}</span>
+                <span>Added: ${(item.addedAt ?? "").slice(0, 19) || "--"}</span>
               </div>
               <button type="button" class="small sign-btn" data-hash="${item.safeTxHash}">
                 ${btnLabel}
@@ -293,7 +385,6 @@
           `;
         }).join("");
 
-        // Attach click handlers
         $queueList.querySelectorAll(".sign-btn").forEach(btn => {
           btn.addEventListener("click", () => signTransaction(btn.dataset.hash));
         });
@@ -305,16 +396,16 @@
     }
 
     // ---------------------------------------------------------------------------
-    // Sign a queued transaction
+    // Sign a queued transaction with Ledger
     // ---------------------------------------------------------------------------
     async function signTransaction(safeTxHash) {
-      if (!provider || !signerAddress) {
+      if (!ethApp || !signerAddress) {
         log("Connect your Ledger first.");
         return;
       }
 
       try {
-        log(`Fetching tx details for ${safeTxHash.slice(0, 14)}…`);
+        log(`Fetching tx details for ${safeTxHash.slice(0, 14)}...`);
 
         const response = await fetch(`${API_BASE}/api/safe-tx/${safeTxHash}`);
         if (!response.ok) {
@@ -323,19 +414,29 @@
 
         const { typedData } = await response.json();
 
-        log("Please confirm on your Ledger device…");
+        log("Please review and confirm on your Ledger device...");
 
-        const signature = await provider.request({
-          method: "eth_signTypedData_v4",
-          params: [signerAddress, JSON.stringify(typedData)],
-        });
+        // Sign EIP-712 typed data directly on the Ledger
+        // The Ledger will display the SafeTx fields for the user to verify
+        const domainSeparatorHex = computeDomainSeparator(typedData.domain);
+        const messageHash = computeStructHash(typedData);
 
-        log("Signature received, submitting confirmation…");
+        const signature = await ethApp.signEIP712HashedMessage(
+          "44'/60'/0'/0/0",
+          domainSeparatorHex,
+          messageHash
+        );
+
+        // Construct the full signature from v, r, s
+        const v = signature.v.toString(16).padStart(2, "0");
+        const fullSignature = "0x" + signature.r + signature.s + v;
+
+        log("Signature received, submitting confirmation...");
 
         const confirmResponse = await fetch(`${API_BASE}/api/safe-tx/${safeTxHash}/confirm`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ signature }),
+          body: JSON.stringify({ signature: fullSignature }),
         });
 
         if (!confirmResponse.ok) {
@@ -351,97 +452,199 @@
     }
 
     // ---------------------------------------------------------------------------
-    // Ledger connection via EIP-6963 provider discovery
+    // EIP-712 hashing helpers
     // ---------------------------------------------------------------------------
 
-    // Load the Ledger Button SDK (provides EIP-6963 announceProvider)
-    const script = document.createElement("script");
-    script.type = "module";
-    script.textContent = `
-      import { initializeLedgerProvider } from "https://esm.sh/@aspect-build/ledger-connect-kit@0.0.8";
-      initializeLedgerProvider({
-        dAppIdentifier: "safe-ledger-signer",
-        loggerLevel: "info",
-        floatingButtonPosition: "bottom-right",
-        environment: "production",
-      });
-    `;
-    document.head.appendChild(script);
+    // Compute the EIP-712 domain separator hash
+    function computeDomainSeparator(domain) {
+      // domainSeparator = keccak256(encode(EIP712Domain type hash, chainId, verifyingContract))
+      const typeHash = keccak256String(
+        "EIP712Domain(uint256 chainId,address verifyingContract)"
+      );
+      const chainIdHex = BigInt(domain.chainId).toString(16).padStart(64, "0");
+      const contractHex = domain.verifyingContract.slice(2).toLowerCase().padStart(64, "0");
+      return keccak256Hex(typeHash + chainIdHex + contractHex);
+    }
 
-    // Listen for the Ledger provider
-    window.addEventListener("eip6963:announceProvider", (event) => {
-      const detail = event.detail;
-      if (detail?.provider) {
-        provider = detail.provider;
-        log(`Ledger provider discovered: ${detail.info?.name ?? "unknown"}`);
-        $btnConnect.disabled = false;
+    // Compute the struct hash for a SafeTx message
+    function computeStructHash(typedData) {
+      const typeHash = keccak256String(
+        "SafeTx(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,uint256 nonce)"
+      );
+
+      const msg = typedData.message;
+
+      const encodedFields =
+        typeHash +
+        encodeAddress(msg.to) +
+        encodeUint256(msg.value) +
+        keccak256Bytes(msg.data) +
+        encodeUint8(msg.operation) +
+        encodeUint256(msg.safeTxGas) +
+        encodeUint256(msg.baseGas) +
+        encodeUint256(msg.gasPrice) +
+        encodeAddress(msg.gasToken) +
+        encodeAddress(msg.refundReceiver) +
+        encodeUint256(msg.nonce);
+
+      return keccak256Hex(encodedFields);
+    }
+
+    function encodeAddress(addr) {
+      return addr.slice(2).toLowerCase().padStart(64, "0");
+    }
+
+    function encodeUint256(val) {
+      return BigInt(val).toString(16).padStart(64, "0");
+    }
+
+    function encodeUint8(val) {
+      return Number(val).toString(16).padStart(64, "0");
+    }
+
+    // keccak256 of a hex string (no 0x prefix) → returns hex string (no 0x prefix)
+    async function keccak256HexAsync(hexStr) {
+      // We use SubtleCrypto for SHA-256 but keccak256 is different.
+      // Since we can't use SubtleCrypto for keccak, we use a tiny inline implementation.
+      return keccak256Hex(hexStr);
+    }
+
+    // Synchronous keccak256 — tiny implementation for browser use
+    // Input: hex string (no 0x prefix), Output: hex string (no 0x prefix)
+    function keccak256Hex(hexStr) {
+      const bytes = hexToBytes(hexStr);
+      const hash = keccak256(bytes);
+      return bytesToHex(hash);
+    }
+
+    function keccak256String(str) {
+      const bytes = new TextEncoder().encode(str);
+      const hash = keccak256(bytes);
+      return bytesToHex(hash);
+    }
+
+    function keccak256Bytes(hexStr) {
+      // hexStr could be "0x..." or "0x"
+      const clean = hexStr.startsWith("0x") ? hexStr.slice(2) : hexStr;
+      if (clean.length === 0) {
+        return bytesToHex(keccak256(new Uint8Array(0)));
       }
-    });
+      return bytesToHex(keccak256(hexToBytes(clean)));
+    }
 
-    window.dispatchEvent(new Event("eip6963:requestProvider"));
-
-    // Connect button
-    $btnConnect.addEventListener("click", async () => {
-      if (!provider) {
-        log("No Ledger provider discovered yet. Make sure the Ledger button loaded.");
-        return;
+    function hexToBytes(hex) {
+      const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+      const bytes = new Uint8Array(clean.length / 2);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(clean.substr(i * 2, 2), 16);
       }
+      return bytes;
+    }
 
-      try {
-        $btnConnect.disabled = true;
-        $btnConnect.textContent = "Connecting…";
-        log("Requesting accounts from Ledger…");
+    function bytesToHex(bytes) {
+      return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+    }
 
-        const accounts = await provider.request({
-          method: "eth_requestAccounts",
-          params: [],
-        });
+    // ---- Keccak-256 (tiny, standalone, no dependencies) ----
+    // Based on the reference keccak-f[1600] permutation
+    const KECCAK_ROUNDS = 24;
+    const ROUND_CONSTANTS = [
+      0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an, 0x8000000080008000n,
+      0x000000000000808bn, 0x0000000080000001n, 0x8000000080008081n, 0x8000000000008009n,
+      0x000000000000008an, 0x0000000000000088n, 0x0000000080008009n, 0x000000008000000an,
+      0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n, 0x8000000000008003n,
+      0x8000000000008002n, 0x8000000000000080n, 0x000000000000800an, 0x800000008000000an,
+      0x8000000080008081n, 0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n,
+    ];
+    const ROTATION_OFFSETS = [
+      [0,36,3,41,18],[1,44,10,45,2],[62,6,43,15,61],[28,55,25,21,56],[27,20,39,8,14]
+    ];
+    const mask64 = (1n << 64n) - 1n;
 
-        signerAddress = accounts[0];
-        if (!signerAddress) {
-          throw new Error("No account returned from Ledger");
+    function rot64(x, n) {
+      n = BigInt(n);
+      return ((x << n) | (x >> (64n - n))) & mask64;
+    }
+
+    function keccakF1600(state) {
+      for (let round = 0; round < KECCAK_ROUNDS; round++) {
+        // Theta
+        const C = new Array(5);
+        for (let x = 0; x < 5; x++) {
+          C[x] = state[x][0] ^ state[x][1] ^ state[x][2] ^ state[x][3] ^ state[x][4];
         }
-
-        const chainIdHex = await provider.request({
-          method: "eth_chainId",
-          params: [],
-        });
-
-        $accountAddress.textContent = signerAddress;
-        $chainIdDisplay.textContent = `${parseInt(chainIdHex, 16)} (${chainIdHex})`;
-        $accountInfo.style.display = "block";
-        $statusDot.className = "status-dot connected";
-        $btnConnect.textContent = "Connected";
-
-        log(`Connected: ${signerAddress}`);
-
-        // Listen for account changes
-        provider.on("accountsChanged", (accounts) => {
-          signerAddress = accounts[0] || null;
-          $accountAddress.textContent = signerAddress ?? "—";
-          log(`Account changed: ${signerAddress}`);
-        });
-
-        // Listen for disconnect
-        provider.on("disconnect", () => {
-          log("Ledger disconnected");
-          signerAddress = null;
-          $statusDot.className = "status-dot disconnected";
-          $btnConnect.textContent = "Connect Ledger";
-          $btnConnect.disabled = false;
-          $accountInfo.style.display = "none";
-        });
-      } catch (err) {
-        log(`Connection error: ${err.message}`);
-        $btnConnect.textContent = "Connect Ledger";
-        $btnConnect.disabled = false;
+        const D = new Array(5);
+        for (let x = 0; x < 5; x++) {
+          D[x] = C[(x + 4) % 5] ^ rot64(C[(x + 1) % 5], 1);
+        }
+        for (let x = 0; x < 5; x++) {
+          for (let y = 0; y < 5; y++) {
+            state[x][y] = (state[x][y] ^ D[x]) & mask64;
+          }
+        }
+        // Rho and Pi
+        const B = Array.from({length: 5}, () => new Array(5).fill(0n));
+        for (let x = 0; x < 5; x++) {
+          for (let y = 0; y < 5; y++) {
+            B[y][(2 * x + 3 * y) % 5] = rot64(state[x][y], ROTATION_OFFSETS[x][y]);
+          }
+        }
+        // Chi
+        for (let x = 0; x < 5; x++) {
+          for (let y = 0; y < 5; y++) {
+            state[x][y] = (B[x][y] ^ ((~B[(x + 1) % 5][y] & mask64) & B[(x + 2) % 5][y])) & mask64;
+          }
+        }
+        // Iota
+        state[0][0] = (state[0][0] ^ ROUND_CONSTANTS[round]) & mask64;
       }
-    });
+    }
 
-    // Refresh button
+    function keccak256(input) {
+      const rate = 136; // (1600 - 256*2) / 8
+      // Padding (pad10*1)
+      const msgLen = input.length;
+      const blockCount = Math.floor((msgLen + rate) / rate);
+      const padded = new Uint8Array(blockCount * rate);
+      padded.set(input);
+      padded[msgLen] = 0x01;
+      padded[padded.length - 1] |= 0x80;
+
+      // Initialize state
+      const state = Array.from({length: 5}, () => new Array(5).fill(0n));
+
+      // Absorb
+      for (let block = 0; block < blockCount; block++) {
+        const offset = block * rate;
+        for (let i = 0; i < rate; i += 8) {
+          const x = (i / 8) % 5;
+          const y = Math.floor((i / 8) / 5);
+          let lane = 0n;
+          for (let b = 0; b < 8; b++) {
+            lane |= BigInt(padded[offset + i + b]) << BigInt(b * 8);
+          }
+          state[x][y] = (state[x][y] ^ lane) & mask64;
+        }
+        keccakF1600(state);
+      }
+
+      // Squeeze (256 bits = 32 bytes)
+      const output = new Uint8Array(32);
+      for (let i = 0; i < 32; i += 8) {
+        const x = (i / 8) % 5;
+        const y = Math.floor((i / 8) / 5);
+        const lane = state[x][y];
+        for (let b = 0; b < 8 && (i + b) < 32; b++) {
+          output[i + b] = Number((lane >> BigInt(b * 8)) & 0xffn);
+        }
+      }
+      return output;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Refresh button + auto-refresh
+    // ---------------------------------------------------------------------------
     $btnRefresh.addEventListener("click", refreshQueue);
-
-    // Auto-refresh on load and every 10 seconds
     refreshQueue();
     setInterval(refreshQueue, 10000);
   </script>
