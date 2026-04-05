@@ -3,88 +3,448 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ledger + Safe — Propose 1 USDC Transfer</title>
+  <title>Ledger + Safe — Sign Transactions</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-    .container { max-width: 560px; width: 100%; padding: 32px; }
-    h1 { font-size: 1.4rem; margin-bottom: 8px; }
-    .subtitle { color: #8b949e; margin-bottom: 24px; font-size: 0.9rem; }
-    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
-    .card h2 { font-size: 1rem; margin-bottom: 12px; color: #58a6ff; }
-    .info-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 0.85rem; border-bottom: 1px solid #21262d; }
-    .info-row:last-child { border-bottom: none; }
-    .label { color: #8b949e; }
-    .value { color: #e6edf3; font-family: monospace; font-size: 0.8rem; word-break: break-all; text-align: right; max-width: 320px; }
-    button { background: #238636; color: #fff; border: none; padding: 12px 24px; border-radius: 6px; font-size: 0.95rem; cursor: pointer; width: 100%; margin-top: 8px; }
-    button:hover { background: #2ea043; }
-    button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
-    button.secondary { background: #30363d; }
-    button.secondary:hover { background: #3d444d; }
-    button.small { width: auto; padding: 8px 14px; font-size: 0.85rem; margin-top: 0; }
-    .queue-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid #21262d; font-size: 0.8rem; }
-    .queue-row:last-child { border-bottom: none; }
-    .queue-meta { flex: 1; min-width: 200px; color: #8b949e; font-family: monospace; }
-    .queue-hash { color: #58a6ff; word-break: break-all; }
-    #log { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-top: 16px; font-family: monospace; font-size: 0.8rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; color: #8b949e; }
-    .status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
-    .status.disconnected { background: #f85149; }
-    .status.connected { background: #3fb950; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .container {
+      max-width: 620px;
+      width: 100%;
+      padding: 32px;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: #8b949e;
+      margin-bottom: 24px;
+      font-size: 0.9rem;
+    }
+
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    .card h2 {
+      font-size: 1rem;
+      margin-bottom: 12px;
+      color: #58a6ff;
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      font-size: 0.85rem;
+      border-bottom: 1px solid #21262d;
+    }
+
+    .info-row:last-child {
+      border-bottom: none;
+    }
+
+    .label {
+      color: #8b949e;
+    }
+
+    .value {
+      color: #e6edf3;
+      font-family: monospace;
+      font-size: 0.8rem;
+      word-break: break-all;
+      text-align: right;
+      max-width: 360px;
+    }
+
+    button {
+      background: #238636;
+      color: #fff;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 8px;
+    }
+
+    button:hover {
+      background: #2ea043;
+    }
+
+    button:disabled {
+      background: #21262d;
+      color: #484f58;
+      cursor: not-allowed;
+    }
+
+    button.secondary {
+      background: #30363d;
+    }
+
+    button.secondary:hover {
+      background: #3d444d;
+    }
+
+    button.small {
+      width: auto;
+      padding: 8px 14px;
+      font-size: 0.85rem;
+      margin-top: 0;
+    }
+
+    .queue-item {
+      background: #0d1117;
+      border: 1px solid #21262d;
+      border-radius: 6px;
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+
+    .queue-item .hash {
+      color: #58a6ff;
+      font-family: monospace;
+      font-size: 0.78rem;
+      word-break: break-all;
+      margin-bottom: 6px;
+    }
+
+    .queue-item .meta {
+      color: #8b949e;
+      font-size: 0.8rem;
+      margin-bottom: 8px;
+    }
+
+    .queue-item .meta span {
+      margin-right: 12px;
+    }
+
+    .queue-empty {
+      color: #484f58;
+      font-size: 0.85rem;
+      padding: 8px 0;
+    }
+
+    #log {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 16px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      max-height: 300px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      color: #8b949e;
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+
+    .status-dot.disconnected {
+      background: #f85149;
+    }
+
+    .status-dot.connected {
+      background: #3fb950;
+    }
   </style>
-  <script type="module" crossorigin src="/assets/index-BO0F12Ka.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-BYUPxKQR.css">
 </head>
 <body>
+
   <div class="container">
-    <h1>Ledger + Safe Integration</h1>
-    <p class="subtitle">Propose a 1 USDC transfer, or sign txs you accepted in Telegram (Safe monitor server).</p>
+    <h1>Ledger + Safe</h1>
+    <p class="subtitle">Sign approved Safe multisig transactions with your Ledger hardware wallet.</p>
 
+    <!-- Ledger connection -->
     <div class="card">
-      <h2>Telegram-approved queue</h2>
-      <p style="color:#8b949e;font-size:0.8rem;margin-bottom:10px;">After you tap <b>Accept</b> in Telegram, txs appear here. Connect Ledger, then sign.</p>
-      <button type="button" id="btnRefreshQueue" class="secondary small">Refresh queue</button>
-      <div id="queueList" style="margin-top:12px;"></div>
-    </div>
-
-    <div class="card">
-      <h2><span class="status disconnected" id="statusDot"></span>Ledger Connection</h2>
+      <h2>
+        <span class="status-dot disconnected" id="statusDot"></span>
+        Ledger Connection
+      </h2>
       <button id="btnConnect" class="secondary">Connect Ledger</button>
-      <div id="accountInfo" style="display:none; margin-top: 12px;">
+      <div id="accountInfo" style="display: none; margin-top: 12px;">
         <div class="info-row">
           <span class="label">Account</span>
-          <span class="value" id="account">—</span>
+          <span class="value" id="accountAddress">—</span>
         </div>
         <div class="info-row">
           <span class="label">Chain ID</span>
-          <span class="value" id="chainId">—</span>
+          <span class="value" id="chainIdDisplay">—</span>
         </div>
       </div>
     </div>
 
+    <!-- Transaction queue -->
     <div class="card">
-      <h2>Transaction Details</h2>
-      <div class="info-row">
-        <span class="label">Safe</span>
-        <span class="value" id="safeAddr">—</span>
-      </div>
-      <div class="info-row">
-        <span class="label">Action</span>
-        <span class="value">Transfer 1 USDC</span>
-      </div>
-      <div class="info-row">
-        <span class="label">To</span>
-        <span class="value">0x0000…0000</span>
-      </div>
-      <div class="info-row">
-        <span class="label">USDC Contract</span>
-        <span class="value" id="usdcAddr">—</span>
-      </div>
+      <h2>Transaction Queue</h2>
+      <p style="color: #8b949e; font-size: 0.8rem; margin-bottom: 10px;">
+        Transactions approved via MCP or CLI appear here. Connect your Ledger, then sign.
+      </p>
+      <button type="button" id="btnRefresh" class="secondary small">Refresh</button>
+      <div id="queueList" style="margin-top: 12px;"></div>
     </div>
 
-    <button id="btnPropose" disabled>Propose & Sign with Ledger</button>
-
+    <!-- Log -->
     <div id="log"></div>
   </div>
+
+  <script type="module">
+    // ---------------------------------------------------------------------------
+    // Config — the API base is the same origin that serves this page
+    // ---------------------------------------------------------------------------
+    const API_BASE = window.location.origin;
+
+    // ---------------------------------------------------------------------------
+    // DOM refs
+    // ---------------------------------------------------------------------------
+    const $log            = document.getElementById("log");
+    const $btnConnect     = document.getElementById("btnConnect");
+    const $statusDot      = document.getElementById("statusDot");
+    const $accountInfo    = document.getElementById("accountInfo");
+    const $accountAddress = document.getElementById("accountAddress");
+    const $chainIdDisplay = document.getElementById("chainIdDisplay");
+    const $queueList      = document.getElementById("queueList");
+    const $btnRefresh     = document.getElementById("btnRefresh");
+
+    // ---------------------------------------------------------------------------
+    // State
+    // ---------------------------------------------------------------------------
+    let provider = null;
+    let signerAddress = null;
+
+    // ---------------------------------------------------------------------------
+    // Logging
+    // ---------------------------------------------------------------------------
+    function log(message) {
+      const time = new Date().toLocaleTimeString();
+      $log.textContent += `[${time}] ${message}\n`;
+      $log.scrollTop = $log.scrollHeight;
+      console.log(message);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Queue: fetch and render
+    // ---------------------------------------------------------------------------
+    async function refreshQueue() {
+      try {
+        const response = await fetch(`${API_BASE}/api/ledger-queue`);
+        if (!response.ok) {
+          throw new Error(`${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const items = data.items ?? [];
+
+        if (items.length === 0) {
+          $queueList.innerHTML = '<p class="queue-empty">No transactions in queue.</p>';
+          return;
+        }
+
+        $queueList.innerHTML = items.map(item => {
+          const isReject = item.decision === "reject";
+          const badge = isReject
+            ? '<span style="color: #f85149; font-weight: 600;">REJECT</span>'
+            : '<span style="color: #3fb950; font-weight: 600;">APPROVE</span>';
+          const btnLabel = isReject ? "Sign Rejection" : "Sign with Ledger";
+
+          return `
+            <div class="queue-item" style="border-color: ${isReject ? '#f8514933' : '#21262d'};">
+              <div style="margin-bottom: 6px;">${badge} <span style="color: #8b949e; font-size: 0.78rem;">via ${item.source ?? "—"}</span></div>
+              <div class="hash">${item.safeTxHash}</div>
+              <div class="meta">
+                <span>Nonce: ${item.nonce ?? "—"}</span>
+                <span>To: ${(item.to ?? "").slice(0, 14)}…</span>
+                <span>Value: ${item.value ?? "0"}</span>
+                ${item.decodedMethod ? `<span>Method: ${item.decodedMethod}</span>` : ""}
+                <span>Added: ${(item.addedAt ?? "").slice(0, 19) || "—"}</span>
+              </div>
+              <button type="button" class="small sign-btn" data-hash="${item.safeTxHash}">
+                ${btnLabel}
+              </button>
+            </div>
+          `;
+        }).join("");
+
+        // Attach click handlers
+        $queueList.querySelectorAll(".sign-btn").forEach(btn => {
+          btn.addEventListener("click", () => signTransaction(btn.dataset.hash));
+        });
+      } catch (err) {
+        $queueList.innerHTML = `<p style="color: #f85149; font-size: 0.85rem;">
+          Could not load queue: ${err.message}
+        </p>`;
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Sign a queued transaction
+    // ---------------------------------------------------------------------------
+    async function signTransaction(safeTxHash) {
+      if (!provider || !signerAddress) {
+        log("Connect your Ledger first.");
+        return;
+      }
+
+      try {
+        log(`Fetching tx details for ${safeTxHash.slice(0, 14)}…`);
+
+        const response = await fetch(`${API_BASE}/api/safe-tx/${safeTxHash}`);
+        if (!response.ok) {
+          throw new Error(`${response.status} ${response.statusText}`);
+        }
+
+        const { typedData } = await response.json();
+
+        log("Please confirm on your Ledger device…");
+
+        const signature = await provider.request({
+          method: "eth_signTypedData_v4",
+          params: [signerAddress, JSON.stringify(typedData)],
+        });
+
+        log("Signature received, submitting confirmation…");
+
+        const confirmResponse = await fetch(`${API_BASE}/api/safe-tx/${safeTxHash}/confirm`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ signature }),
+        });
+
+        if (!confirmResponse.ok) {
+          const error = await confirmResponse.json();
+          throw new Error(error.error || "Confirmation failed");
+        }
+
+        log("Transaction confirmed on Safe!");
+        refreshQueue();
+      } catch (err) {
+        log(`Sign error: ${err.message}`);
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Ledger connection via EIP-6963 provider discovery
+    // ---------------------------------------------------------------------------
+
+    // Load the Ledger Button SDK (provides EIP-6963 announceProvider)
+    const script = document.createElement("script");
+    script.type = "module";
+    script.textContent = `
+      import { initializeLedgerProvider } from "https://esm.sh/@aspect-build/ledger-connect-kit@0.0.8";
+      initializeLedgerProvider({
+        dAppIdentifier: "safe-ledger-signer",
+        loggerLevel: "info",
+        floatingButtonPosition: "bottom-right",
+        environment: "production",
+      });
+    `;
+    document.head.appendChild(script);
+
+    // Listen for the Ledger provider
+    window.addEventListener("eip6963:announceProvider", (event) => {
+      const detail = event.detail;
+      if (detail?.provider) {
+        provider = detail.provider;
+        log(`Ledger provider discovered: ${detail.info?.name ?? "unknown"}`);
+        $btnConnect.disabled = false;
+      }
+    });
+
+    window.dispatchEvent(new Event("eip6963:requestProvider"));
+
+    // Connect button
+    $btnConnect.addEventListener("click", async () => {
+      if (!provider) {
+        log("No Ledger provider discovered yet. Make sure the Ledger button loaded.");
+        return;
+      }
+
+      try {
+        $btnConnect.disabled = true;
+        $btnConnect.textContent = "Connecting…";
+        log("Requesting accounts from Ledger…");
+
+        const accounts = await provider.request({
+          method: "eth_requestAccounts",
+          params: [],
+        });
+
+        signerAddress = accounts[0];
+        if (!signerAddress) {
+          throw new Error("No account returned from Ledger");
+        }
+
+        const chainIdHex = await provider.request({
+          method: "eth_chainId",
+          params: [],
+        });
+
+        $accountAddress.textContent = signerAddress;
+        $chainIdDisplay.textContent = `${parseInt(chainIdHex, 16)} (${chainIdHex})`;
+        $accountInfo.style.display = "block";
+        $statusDot.className = "status-dot connected";
+        $btnConnect.textContent = "Connected";
+
+        log(`Connected: ${signerAddress}`);
+
+        // Listen for account changes
+        provider.on("accountsChanged", (accounts) => {
+          signerAddress = accounts[0] || null;
+          $accountAddress.textContent = signerAddress ?? "—";
+          log(`Account changed: ${signerAddress}`);
+        });
+
+        // Listen for disconnect
+        provider.on("disconnect", () => {
+          log("Ledger disconnected");
+          signerAddress = null;
+          $statusDot.className = "status-dot disconnected";
+          $btnConnect.textContent = "Connect Ledger";
+          $btnConnect.disabled = false;
+          $accountInfo.style.display = "none";
+        });
+      } catch (err) {
+        log(`Connection error: ${err.message}`);
+        $btnConnect.textContent = "Connect Ledger";
+        $btnConnect.disabled = false;
+      }
+    });
+
+    // Refresh button
+    $btnRefresh.addEventListener("click", refreshQueue);
+
+    // Auto-refresh on load and every 10 seconds
+    refreshQueue();
+    setInterval(refreshQueue, 10000);
+  </script>
 
 </body>
 </html>

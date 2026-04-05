@@ -25,18 +25,24 @@ dotenv.config();
 
 // ── arg parsing ───────────────────────────────────────────────────────────
 const args = new Set(process.argv.slice(2));
-const inputMode = args.has("--mcp") ? "mcp" : args.has("--dev") ? "dev" : null;
+const inputMode   = args.has("--mcp") ? "mcp" : args.has("--dev") ? "dev" : null;
+const confirmMode = args.has("--ledger") ? "ledger" : args.has("--telegram") ? "telegram" : null;
 
-if (!inputMode) {
+if (!inputMode || !confirmMode) {
   console.error([
-    "Usage: node index.mjs <--mcp | --dev>",
+    "Usage: node index.mjs <--mcp | --dev> <--ledger | --telegram>",
     "",
-    "  --mcp   MCP server for AI agents (HTTP, Streamable HTTP transport)",
-    "  --dev   Interactive CLI with arrow-key approve/reject",
+    "Input mode (how transactions are decided):",
+    "  --mcp        MCP server for AI agents (HTTP, Streamable HTTP transport)",
+    "  --dev        Interactive CLI with arrow-key approve/reject",
     "",
-    "Flow:  tx → rules.yml check → auto-approve / auto-reject / ask human",
-    "  Approve → Ledger queue (sign at http://127.0.0.1:MCP_PORT/ui)",
-    "  Reject  → Telegram bot for human review",
+    "Confirmation mode (how approved/rejected transactions are signed):",
+    "  --ledger     Serve Ledger UI — connect hardware wallet and sign",
+    "  --telegram   Send to Telegram bot for review and confirmation",
+    "",
+    "Examples:",
+    "  node index.mjs --mcp --ledger",
+    "  node index.mjs --dev --telegram",
   ].join("\n"));
   process.exit(1);
 }
@@ -56,8 +62,9 @@ const apiKit = new SafeApiKit({ chainId: chainIdBn, apiKey });
 
 const telegramToken  = process.env.TELEGRAM_BOT_TOKEN?.trim();
 const telegramChatId = process.env.ADMIN_TELEGRAM_CHAT_ID?.trim();
-if (!telegramToken || !telegramChatId) {
-  console.error("Error: TELEGRAM_BOT_TOKEN and ADMIN_TELEGRAM_CHAT_ID are required in .env.");
+
+if (confirmMode === "telegram" && (!telegramToken || !telegramChatId)) {
+  console.error("Error: --telegram requires TELEGRAM_BOT_TOKEN and ADMIN_TELEGRAM_CHAT_ID in .env.");
   process.exit(1);
 }
 
@@ -98,7 +105,7 @@ async function listPending() {
   return (list.results ?? []).filter((tx) => !tx.isExecuted);
 }
 
-async function appendQueue(tx, source) {
+async function appendQueue(tx, source, decision = "approve") {
   await mkdir(dirname(LEDGER_QUEUE), { recursive: true });
   const q = await readJson(LEDGER_QUEUE, { items: [] });
   if (q.items.some((i) => i.safeTxHash === tx.safeTxHash)) return;
@@ -107,8 +114,11 @@ async function appendQueue(tx, source) {
     nonce:          tx.nonce,
     to:             tx.to,
     value:          tx.value,
+    data:           tx.data ? `${tx.data.slice(0, 66)}…` : null,
+    decodedMethod:  tx.dataDecoded?.method ?? null,
     submissionDate: tx.submissionDate,
     addedAt:        new Date().toISOString(),
+    decision,
     source,
   });
   await writeJson(LEDGER_QUEUE, q);
@@ -117,8 +127,15 @@ async function appendQueue(tx, source) {
 async function approve(safeTxHash, source) {
   const tx = await apiKit.getTransaction(safeTxHash);
   if (!tx?.safeTxHash) throw new Error(`Tx not found: ${safeTxHash}`);
-  await appendQueue(tx, source);
+  await appendQueue(tx, source, "approve");
   await recordDailyApproval(tx.value ?? "0");
+}
+
+async function reject(safeTxHash, source, reason) {
+  const tx = await apiKit.getTransaction(safeTxHash);
+  if (!tx?.safeTxHash) throw new Error(`Tx not found: ${safeTxHash}`);
+  await appendQueue(tx, source, "reject");
+  console.log(`[queue] Rejection queued for Ledger signing: ${safeTxHash.slice(0, 14)}… (${reason ?? "no reason"})`);
 }
 
 // ── Rules engine ─────────────────────────────────────────────────────────
@@ -262,11 +279,14 @@ async function evaluateTransaction(tx) {
   };
 }
 
-// ── Telegram bot (reject → human review) ─────────────────────────────────
-const bot = new TelegramBot(telegramToken, { polling: true });
-bot.on("polling_error", (err) => {
-  console.error("[telegram] Polling error:", err.message);
-});
+// ── Telegram bot (only in --telegram mode) ───────────────────────────────
+let bot = null;
+if (confirmMode === "telegram") {
+  bot = new TelegramBot(telegramToken, { polling: true });
+  bot.on("polling_error", (err) => {
+    console.error("[telegram] Polling error:", err.message);
+  });
+}
 
 const hashLookup = new Map();
 function shortKey(safeTxHash) {
@@ -288,6 +308,7 @@ function formatTxMessage(s) {
 }
 
 async function sendRejectionToTelegram(safeTxHash, source, reason) {
+  if (!bot) return;
   const tx = await apiKit.getTransaction(safeTxHash);
   if (!tx?.safeTxHash) return;
   const s = summarize(tx);
@@ -310,7 +331,7 @@ async function sendRejectionToTelegram(safeTxHash, source, reason) {
   }
 }
 
-bot.on("callback_query", async (query) => {
+if (bot) bot.on("callback_query", async (query) => {
   const [action, key] = (query.data ?? "").split(":");
   if (action !== "a" && action !== "r") return;
 
@@ -353,7 +374,6 @@ function startServer() {
   });
 
   app.use("/ui", express.static(join(__dirname, "ledger-ui")));
-  app.use("/assets", express.static(join(__dirname, "ledger-ui", "assets")));
 
   app.get("/api/ledger-queue", async (_req, res) => {
     const q = await readJson(LEDGER_QUEUE, { items: [] });
@@ -486,8 +506,10 @@ async function startMcpInput(app) {
     async ({ safeTxHash, decision, reason }) => {
       if (decision === "approve") {
         await approve(safeTxHash, "mcp");
-      } else {
+      } else if (confirmMode === "telegram") {
         await sendRejectionToTelegram(safeTxHash, "agent", reason);
+      } else {
+        await reject(safeTxHash, "mcp", reason);
       }
       return {
         content: [{ type: "text", text: JSON.stringify({ ok: true, safeTxHash, decision }, null, 2) }],
@@ -585,8 +607,13 @@ async function startDevInput() {
         }
 
         if (verdict.action === "reject") {
-          await sendRejectionToTelegram(tx.safeTxHash, "rules", verdict.reason);
-          console.log(`  ✗ Auto-rejected by rules — sent to Telegram\n`);
+          if (confirmMode === "telegram") {
+            await sendRejectionToTelegram(tx.safeTxHash, "rules", verdict.reason);
+            console.log(`  ✗ Auto-rejected by rules — sent to Telegram\n`);
+          } else {
+            await reject(tx.safeTxHash, `rules:${verdict.matchedRule}`, verdict.reason);
+            console.log(`  ✗ Auto-rejected by rules — rejection queued for Ledger signing\n`);
+          }
           continue;
         }
 
@@ -597,7 +624,10 @@ async function startDevInput() {
             message: `Decision for ${tx.safeTxHash.slice(0, 14)}…:`,
             choices: [
               { name: "Approve  →  Ledger queue for signing",    value: "approve" },
-              { name: "Reject   →  send to Telegram for review", value: "reject"  },
+              { name: confirmMode === "ledger"
+                        ? "Reject   →  sign rejection tx via Ledger"
+                        : "Reject   →  send to Telegram for review",
+                value: "reject" },
               { name: "Skip     →  decide later",                value: "skip"    },
             ],
           },
@@ -607,8 +637,13 @@ async function startDevInput() {
           await approve(tx.safeTxHash, "dev");
           console.log(`  ✓ Approved — added to ledger-queue.json\n`);
         } else if (decision === "reject") {
-          await sendRejectionToTelegram(tx.safeTxHash, "dev");
-          console.log(`  ✗ Rejected — sent to Telegram for review\n`);
+          if (confirmMode === "telegram") {
+            await sendRejectionToTelegram(tx.safeTxHash, "dev");
+            console.log(`  ✗ Rejected — sent to Telegram for review\n`);
+          } else {
+            await reject(tx.safeTxHash, "dev");
+            console.log(`  ✗ Rejected — queued for Ledger signing\n`);
+          }
         } else {
           console.log(`  ↷ Skipped\n`);
         }
@@ -640,13 +675,20 @@ async function main() {
   const wlCount = rules.whitelist?.length ?? 0;
   const kcCount = rules.known_contracts?.length ?? 0;
 
-  console.log(`Starting: mode=${inputMode}`);
+  console.log(`Starting: input=${inputMode}, confirm=${confirmMode}`);
   console.log(`  Rules loaded: ${wlCount} whitelisted, ${kcCount} known contracts`);
   console.log(`  Daily caps: ${rules.daily_caps?.max_total_value ?? "none"} value, ${rules.daily_caps?.max_tx_count ?? "none"} txs`);
   console.log(`  Default: ${rules.default_action ?? "ask"}`);
-  console.log(`  Approve → Ledger queue → sign at http://127.0.0.1:${MCP_PORT}/ui`);
-  console.log(`  Reject  → Telegram bot for human review\n`);
 
+  if (confirmMode === "ledger") {
+    console.log(`  Approve → Ledger queue → sign at http://127.0.0.1:${MCP_PORT}/ui`);
+    console.log(`  Reject  → Ledger queue → sign rejection tx at http://127.0.0.1:${MCP_PORT}/ui\n`);
+  } else {
+    console.log(`  Approve → Ledger queue → Telegram override available`);
+    console.log(`  Reject  → Telegram bot for human review\n`);
+  }
+
+  // Express server is always started (serves API + MCP endpoint; Ledger UI only relevant in --ledger mode)
   const app = startServer();
 
   if (inputMode === "mcp") {

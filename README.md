@@ -13,52 +13,73 @@ npm install
 ```bash
 cp .env.example .env
 ```
-Edit `.env` and add your `SAFE_API_KEY`. For Telegram mode, also add `TELEGRAM_BOT_TOKEN` and `ADMIN_TELEGRAM_CHAT_ID`.
+Edit `.env` and add your `SAFE_API_KEY`. For Telegram notifications, also add `TELEGRAM_BOT_TOKEN` and `ADMIN_TELEGRAM_CHAT_ID`.
 
-## Modes
+## How to Run
 
-The app requires **exactly two flags** to run: one for how transactions are read/decided (Input Mode), and one for how approved transactions are signed (Confirmation Mode).
+The app requires **two flags**: an input mode (how transactions are decided) and a confirmation mode (how they are signed).
 
-### 1. Input Mode Flags (Choose One)
-
-| Flag | Description |
-|------|-------------|
-| `--mcp` | Starts an MCP server over HTTP (Streamable HTTP transport) with tools: `safe_list_pending` and `safe_decide_transaction`. An external AI agent connects and makes decisions. |
-| `--dev` | Starts an interactive command line interface. Lists pending transactions and prompts you to approve/reject using arrow keys. |
-
-### 2. Confirmation Mode Flags (Choose One)
+### Input Modes
 
 | Flag | Description |
 |------|-------------|
-| `--ledger` | Serves the Ledger frontend as a static Express app on `LEDGER_PORT`. Reads `ledger-queue.json` and lets you sign with a Ledger hardware wallet. |
-| `--telegram` | Polls for new pending transactions and sends details to a Telegram bot. You can approve/reject via inline buttons in Telegram. Needs `TELEGRAM_BOT_TOKEN` and `ADMIN_TELEGRAM_CHAT_ID` in `.env`. |
+| `--mcp` | Starts an MCP server. An external AI agent connects and decides on transactions. |
+| `--dev` | Interactive CLI. Lists pending transactions, you approve/reject with arrow keys. |
 
-### Valid Combinations
+### Confirmation Modes
 
-You must combine one Input flag and one Confirmation flag:
+| Flag | Description |
+|------|-------------|
+| `--ledger` | Approved and rejected txs go to a Ledger queue. Open the UI, connect Ledger, sign. |
+| `--telegram` | Rejected txs go to a Telegram bot for human review. Approve override available. |
+
+### npm scripts
 
 ```bash
-# AI agent decides via MCP, you sign via Ledger UI
+npm run mcp:ledger      # AI agent decides via MCP, sign via Ledger
+npm run mcp:telegram    # AI agent decides via MCP, review via Telegram
+npm run dev:ledger      # You decide via CLI, sign via Ledger
+npm run dev:telegram    # You decide via CLI, review via Telegram
+```
+
+Or run directly:
+```bash
 node index.mjs --mcp --ledger
-
-# AI agent decides via MCP, you sign via Telegram bot
-node index.mjs --mcp --telegram
-
-# You decide via CLI, you sign via Ledger UI
-node index.mjs --dev --ledger
-
-# You decide via CLI, you sign via Telegram bot
 node index.mjs --dev --telegram
 ```
 
-*Note: In all modes, approvals write the transaction to `ledger-queue.json`, and rejections are treated as a no-op (the transaction stays pending on-chain).*
+## Flow
+
+### With `--ledger`
+```
+Pending Safe tx
+  → rules.yml evaluation (auto-approve / auto-reject / ask human)
+  → Decision made (via MCP agent or CLI)
+     → Approve → added to Ledger queue
+     → Reject  → added to Ledger queue (as rejection tx)
+  → Open Ledger UI at http://127.0.0.1:3847/ui
+  → Connect Ledger hardware wallet → sign
+```
+
+### With `--telegram`
+```
+Pending Safe tx
+  → rules.yml evaluation
+  → Decision made
+     → Approve → added to Ledger queue
+     → Reject  → sent to Telegram bot for human review
+       → Override → approve and add to Ledger queue
+       → Confirm reject → tx stays pending on-chain
+```
 
 ## MCP Tools
 
 | Tool | Description |
 |------|-------------|
 | `safe_list_pending` | List unexecuted multisig txs for the configured Safe |
-| `safe_decide_transaction` | Approve (→ Ledger queue) or reject (no-op, tx stays pending) |
+| `safe_decide_transaction` | Approve or reject a pending tx (both go to Ledger queue) |
+| `safe_get_rules` | Read the current firewall rules (rules.yml) |
+| `safe_update_rules` | Update the firewall rules |
 
 ## MCP Client Config
 
@@ -85,14 +106,13 @@ Then use the ngrok URL + `/mcp` as your MCP endpoint.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SAFE_API_KEY` | Yes | — | Safe Transaction Service API key |
-| `MCP_PORT` | No | `3847` | Port for the MCP HTTP server |
-| `LEDGER_PORT` | No | `3848` | Port for the Ledger UI server |
-| `TELEGRAM_BOT_TOKEN` | Telegram only | — | Telegram bot token |
-| `ADMIN_TELEGRAM_CHAT_ID` | Telegram only | — | Telegram chat ID to receive notifications |
+| `MCP_PORT` | No | `3847` | Port for the HTTP server (MCP + Ledger UI) |
+| `TELEGRAM_BOT_TOKEN` | No | — | Telegram bot token (for notifications) |
+| `ADMIN_TELEGRAM_CHAT_ID` | No | — | Telegram chat ID for notifications |
 
 ## Config
 
-Safe address, chain ID, and other constants are located in `config.mjs`.
+Safe address, chain ID, and other constants are in `config.mjs`.
 
 | Key | Value |
 |-----|-------|
@@ -105,9 +125,10 @@ Safe address, chain ID, and other constants are located in `config.mjs`.
 
 | File | Purpose |
 |------|---------|
-| `index.mjs` | Single entry point with all mode logic |
+| `index.mjs` | Single entry point — MCP server, dev CLI, Ledger API, Telegram bot |
 | `config.mjs` | Safe address, chain, and owner config |
+| `rules.yml` | Firewall rules (whitelist, known contracts, daily caps) |
 | `.env.example` | Environment variable template |
-| `ledger-ui/` | Built Ledger frontend (static files) |
-| `package.json` | Single root package.json |
-| `ledger-queue.json` | Approved transactions waiting for Ledger signing (auto-created) |
+| `ledger-ui/index.html` | Ledger signing UI (plain HTML, no build step) |
+| `ledger-queue.json` | Transactions waiting for Ledger signing (auto-created) |
+| `daily-stats.json` | Daily approval stats for rate limiting |

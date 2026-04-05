@@ -5,11 +5,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node index.mjs",
-    "mcp_ledger": "node index.mjs --mcp --ledger",
-    "mcp_telegram": "node index.mjs --mcp --telegram",
-    "dev_ledger": "node index.mjs --dev --ledger",
-    "dev_telegram": "node index.mjs --dev --telegram"
+    "start": "node index.mjs --mcp --ledger",
+    "mcp:ledger": "node index.mjs --mcp --ledger",
+    "mcp:telegram": "node index.mjs --mcp --telegram",
+    "dev:ledger": "node index.mjs --dev --ledger",
+    "dev:telegram": "node index.mjs --dev --telegram"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
