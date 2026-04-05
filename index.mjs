@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import dotenv from "dotenv";
-import http from "node:http";
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,15 +35,14 @@ if (!inputMode) {
     "  --dev   Interactive CLI with arrow-key approve/reject",
     "",
     "Flow:  tx → rules.yml check → auto-approve / auto-reject / ask human",
-    "  Approve → Ledger queue (sign at http://127.0.0.1:LEDGER_PORT)",
+    "  Approve → Ledger queue (sign at http://127.0.0.1:MCP_PORT/ui)",
     "  Reject  → Telegram bot for human review",
   ].join("\n"));
   process.exit(1);
 }
 
 // ── config ────────────────────────────────────────────────────────────────
-const MCP_PORT    = Number(process.env.MCP_PORT)    || 3847;
-const LEDGER_PORT = Number(process.env.LEDGER_PORT) || 3848;
+const MCP_PORT = Number(process.env.MCP_PORT) || 3847;
 
 const { safeAddress, chainId } = config;
 const chainIdBn = BigInt(chainId);
@@ -342,11 +340,20 @@ bot.on("callback_query", async (query) => {
   }
 });
 
-// ── Ledger UI (approve → sign) ───────────────────────────────────────────
-function startLedger() {
+// ── Express server (UI + API + MCP on single port) ───────────────────────
+function startServer() {
   const app = express();
 
-  app.use(express.static(join(__dirname, "ledger-ui")));
+  app.use((_req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, mcp-session-id");
+    if (_req.method === "OPTIONS") return res.sendStatus(204);
+    next();
+  });
+
+  app.use("/ui", express.static(join(__dirname, "ledger-ui")));
+  app.use("/assets", express.static(join(__dirname, "ledger-ui", "assets")));
 
   app.get("/api/ledger-queue", async (_req, res) => {
     const q = await readJson(LEDGER_QUEUE, { items: [] });
@@ -360,13 +367,20 @@ function startLedger() {
     res.json({ ok: true });
   });
 
-  app.listen(LEDGER_PORT, () => {
-    console.log(`[ledger] UI at http://127.0.0.1:${LEDGER_PORT}`);
+  app.get("/health", (_req, res) => {
+    res.json({ ok: true, safeAddress, chainId });
   });
+
+  app.listen(MCP_PORT, () => {
+    console.log(`[server] http://127.0.0.1:${MCP_PORT}`);
+    console.log(`[server] Ledger UI: http://127.0.0.1:${MCP_PORT}/ui`);
+  });
+
+  return app;
 }
 
 // ── input mode: MCP ───────────────────────────────────────────────────────
-async function startMcpInput() {
+async function startMcpInput(app) {
   const mcpServer = new McpServer({ name: "safe-agent", version: "1.0.0" });
 
   mcpServer.registerTool(
@@ -453,44 +467,30 @@ async function startMcpInput() {
 
   const transports = new Map();
 
-  const httpServer = http.createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", `http://127.0.0.1:${MCP_PORT}`);
-
-    if (url.pathname === "/mcp") {
-      if (req.method === "POST") {
-        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
-        await mcpServer.server.connect(transport);
-        const sid = transport.sessionId;
-        if (sid) transports.set(sid, transport);
-        transport.onclose = () => { if (sid) transports.delete(sid); };
-        await transport.handleRequest(req, res);
-        return;
-      }
-      if (req.method === "GET" || req.method === "DELETE") {
-        const sid = req.headers["mcp-session-id"];
-        const t = sid ? transports.get(sid) : undefined;
-        if (t) { await t.handleRequest(req, res); return; }
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "no such session" }));
-        return;
-      }
-      res.writeHead(405).end();
-      return;
-    }
-
-    if (url.pathname === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, safeAddress, chainId }));
-      return;
-    }
-
-    res.writeHead(404).end("not found\n");
+  app.post("/mcp", async (req, res) => {
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
+    await mcpServer.server.connect(transport);
+    const sid = transport.sessionId;
+    if (sid) transports.set(sid, transport);
+    transport.onclose = () => { if (sid) transports.delete(sid); };
+    await transport.handleRequest(req, res);
   });
 
-  httpServer.listen(MCP_PORT, () => {
-    console.log(`[mcp] Listening on http://127.0.0.1:${MCP_PORT}/mcp`);
-    console.log(`[mcp] Health: http://127.0.0.1:${MCP_PORT}/health`);
+  app.get("/mcp", async (req, res) => {
+    const sid = req.headers["mcp-session-id"];
+    const t = sid ? transports.get(sid) : undefined;
+    if (t) return t.handleRequest(req, res);
+    res.status(400).json({ error: "no such session" });
   });
+
+  app.delete("/mcp", async (req, res) => {
+    const sid = req.headers["mcp-session-id"];
+    const t = sid ? transports.get(sid) : undefined;
+    if (t) return t.handleRequest(req, res);
+    res.status(400).json({ error: "no such session" });
+  });
+
+  console.log(`[mcp] MCP endpoint: http://127.0.0.1:${MCP_PORT}/mcp`);
 }
 
 // ── input mode: Dev CLI ───────────────────────────────────────────────────
@@ -578,13 +578,13 @@ async function main() {
   console.log(`  Rules loaded: ${wlCount} whitelisted, ${kcCount} known contracts`);
   console.log(`  Daily caps: ${rules.daily_caps?.max_total_value ?? "none"} value, ${rules.daily_caps?.max_tx_count ?? "none"} txs`);
   console.log(`  Default: ${rules.default_action ?? "ask"}`);
-  console.log(`  Approve → Ledger queue → sign at http://127.0.0.1:${LEDGER_PORT}`);
+  console.log(`  Approve → Ledger queue → sign at http://127.0.0.1:${MCP_PORT}/ui`);
   console.log(`  Reject  → Telegram bot for human review\n`);
 
-  startLedger();
+  const app = startServer();
 
   if (inputMode === "mcp") {
-    await startMcpInput();
+    await startMcpInput(app);
   } else {
     await startDevInput();
   }

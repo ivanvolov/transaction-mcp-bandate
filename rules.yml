@@ -9,9 +9,9 @@
 
 whitelist:
   # Addresses that are always safe to send to (within limits)
-  - address: "0x156D1aBD1F207f73a6ef13EF22E862Fc141156bD"
-    label: "Team wallet (signer)"
-    max_value_per_tx: "500000000000000000"   # 0.5 ETH
+  # - address: "0x156D1aBD1F207f73a6ef13EF22E862Fc141156bD"
+  #   label: "Team wallet (signer)"
+  #   max_value_per_tx: "500000000"   # 0.5 ETH
 
   # - address: "0x..."
   #   label: "Treasury"

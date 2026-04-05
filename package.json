@@ -6,8 +6,10 @@
   "type": "module",
   "scripts": {
     "start": "node index.mjs",
-    "mcp": "node index.mjs --mcp",
-    "dev": "node index.mjs --dev"
+    "mcp_ledger": "node index.mjs --mcp --ledger",
+    "mcp_telegram": "node index.mjs --mcp --telegram",
+    "dev_ledger": "node index.mjs --dev --ledger",
+    "dev_telegram": "node index.mjs --dev --telegram"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
