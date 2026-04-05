@@ -367,6 +367,72 @@ function startServer() {
     res.json({ ok: true });
   });
 
+  app.use(express.json());
+
+  app.get("/api/safe-tx/:hash", async (req, res) => {
+    try {
+      const tx = await apiKit.getTransaction(req.params.hash);
+      if (!tx?.safeTxHash) return res.status(404).json({ error: "tx not found" });
+
+      const typedData = {
+        types: {
+          EIP712Domain: [
+            { name: "chainId", type: "uint256" },
+            { name: "verifyingContract", type: "address" },
+          ],
+          SafeTx: [
+            { name: "to", type: "address" },
+            { name: "value", type: "uint256" },
+            { name: "data", type: "bytes" },
+            { name: "operation", type: "uint8" },
+            { name: "safeTxGas", type: "uint256" },
+            { name: "baseGas", type: "uint256" },
+            { name: "gasPrice", type: "uint256" },
+            { name: "gasToken", type: "address" },
+            { name: "refundReceiver", type: "address" },
+            { name: "nonce", type: "uint256" },
+          ],
+        },
+        primaryType: "SafeTx",
+        domain: { chainId, verifyingContract: safeAddress },
+        message: {
+          to: tx.to,
+          value: tx.value,
+          data: tx.data || "0x",
+          operation: tx.operation,
+          safeTxGas: tx.safeTxGas,
+          baseGas: tx.baseGas,
+          gasPrice: tx.gasPrice,
+          gasToken: tx.gasToken,
+          refundReceiver: tx.refundReceiver,
+          nonce: tx.nonce,
+        },
+      };
+
+      res.json({ tx: summarize(tx), typedData });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/safe-tx/:hash/confirm", async (req, res) => {
+    try {
+      const { signature } = req.body;
+      if (!signature) return res.status(400).json({ error: "signature required" });
+
+      await apiKit.confirmTransaction(req.params.hash, signature);
+
+      const q = await readJson(LEDGER_QUEUE, { items: [] });
+      q.items = q.items.filter((i) => i.safeTxHash !== req.params.hash);
+      await writeJson(LEDGER_QUEUE, q);
+
+      console.log(`[ledger] Confirmation submitted for ${req.params.hash.slice(0, 14)}…`);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/health", (_req, res) => {
     res.json({ ok: true, safeAddress, chainId });
   });
